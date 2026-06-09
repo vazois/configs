@@ -1,0 +1,6 @@
+public|https://github.com/microsoft/garnet.git|/home/guser/garnet
+public|https://github.com/valkey-io/valkey.git|/home/guser/valkey
+public|https://github.com/dragonflydb/dragonfly.git|/home/guser/dragonfly
+public|https://github.com/redis/redis.git|/home/guser/redis
+public|https://github.com/redis/memtier_benchmark|/home/guser/memtier
+public|https://github.com/vazois/configs.git|/home/guser/configs

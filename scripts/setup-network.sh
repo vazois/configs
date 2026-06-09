@@ -1,0 +1,87 @@
+#!/bin/bash
+set -e
+source /tmp/deploy-actions/config.env
+
+# =============================================================
+# Network configuration script for Azure VMSS instances.
+# Configures eth1 (secondary NIC) for cross-VM communication
+# used in Redis/Valkey/Garnet benchmarking scenarios.
+# =============================================================
+
+# -------------------------------------------------------------
+# 1. RSS Queue Maximization
+#    Azure defaults to a small number of RSS queues. This spreads
+#    NIC interrupts across all available cores for max throughput.
+# -------------------------------------------------------------
+for NIC in eth0 eth1; do
+  if [ -d "/sys/class/net/$NIC" ]; then
+    MAX_Q=$(ethtool -l $NIC 2>/dev/null | grep -m1 "Combined:" | awk '{print $2}')
+    if [ -n "$MAX_Q" ] && [ "$MAX_Q" -gt 0 ]; then
+      CURRENT_Q=$(ethtool -l $NIC | grep -A4 "Current" | grep "Combined:" | awk '{print $2}')
+      if [ "$CURRENT_Q" -lt "$MAX_Q" ]; then
+        echo "[$NIC] Setting RSS queues from $CURRENT_Q to $MAX_Q"
+        ethtool -L $NIC combined $MAX_Q
+      else
+        echo "[$NIC] Already at max RSS queues ($MAX_Q)"
+      fi
+    fi
+  fi
+done
+
+# -------------------------------------------------------------
+# 2. Policy-Based Routing for eth1
+#    By default, reply traffic from eth1's IP exits via eth0
+#    (asymmetric routing). Azure drops these packets. We fix this
+#    by creating a separate routing table (100) for eth1 traffic.
+# -------------------------------------------------------------
+ETH1_IP=$(ip -4 addr show dev $IFACE | grep -oP 'inet \K[\d.]+')
+ETH1_CIDR=$(ip -4 addr show dev $IFACE | grep -oP 'inet \K[\d./]+')
+SUBNET_CIDR=$(echo "$ETH1_CIDR" | sed 's/\.[0-9]*\//\.0\//')
+
+if [ -z "$ETH1_IP" ]; then
+  echo "ERROR: No IP found on $IFACE, skipping routing setup"
+  exit 0
+fi
+
+echo "Configuring policy routing for $IFACE (IP: $ETH1_IP, Subnet: $SUBNET_CIDR)"
+
+# Disable reverse path filtering so inbound packets on eth1
+# are not dropped by the kernel's source validation check
+sysctl -w net.ipv4.conf.all.rp_filter=0
+sysctl -w net.ipv4.conf.$IFACE.rp_filter=0
+
+# Route eth1 subnet traffic through table 100 via eth1
+ip route add $SUBNET_CIDR dev $IFACE src $ETH1_IP table 100 2>/dev/null || true
+
+# Force all packets with src=eth1_IP to use routing table 100
+ip rule add from $ETH1_IP table 100 priority 100 2>/dev/null || true
+
+# -------------------------------------------------------------
+# 3. Iptables Rules
+#    Default INPUT policy is DROP on Azure Linux. Open ICMP for
+#    ping diagnostics, TCP 6379 for Redis/Valkey/Garnet, and
+#    SSH (22) for inter-VM communication within the subnet.
+# -------------------------------------------------------------
+iptables -C INPUT -p icmp --icmp-type echo-request -j ACCEPT 2>/dev/null || \
+  iptables -I INPUT -p icmp --icmp-type echo-request -j ACCEPT
+iptables -C INPUT -p icmp --icmp-type echo-reply -j ACCEPT 2>/dev/null || \
+  iptables -I INPUT -p icmp --icmp-type echo-reply -j ACCEPT
+iptables -C INPUT -i $IFACE -p tcp --dport 6379 -j ACCEPT 2>/dev/null || \
+  iptables -I INPUT -i $IFACE -p tcp --dport 6379 -j ACCEPT
+iptables -C INPUT -i $IFACE -p tcp --dport 7000:7099 -j ACCEPT 2>/dev/null || \
+  iptables -I INPUT -i $IFACE -p tcp --dport 7000:7099 -j ACCEPT
+# Allow SSH between VMs in the same subnet
+iptables -C INPUT -p tcp --dport 22 -s $SUBNET -j ACCEPT 2>/dev/null || \
+  iptables -I INPUT -p tcp --dport 22 -s $SUBNET -j ACCEPT
+
+# -------------------------------------------------------------
+# 4. TCP Tuning for High-Throughput Benchmarking
+#    Increase socket buffer sizes and backlog to sustain multi-GB/s
+#    traffic without kernel-level drops.
+# -------------------------------------------------------------
+sysctl -w net.core.wmem_max=67108864
+sysctl -w net.core.netdev_max_backlog=250000
+sysctl -w net.ipv4.tcp_rmem="4096 87380 33554432"
+sysctl -w net.ipv4.tcp_wmem="4096 87380 33554432"
+
+echo "Network setup complete: RSS queues, routing, iptables, and TCP tuning configured."
