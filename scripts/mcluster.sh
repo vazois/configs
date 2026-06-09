@@ -2,6 +2,7 @@
 # Usage:
 #   mcluster start <system> <template> <nodes> [--cluster|--no-cluster]
 #   mcluster stop [system] [nodes]
+#   mcluster update <system> <template> [nodes] [--cluster|--no-cluster]
 #
 # Examples:
 #   mcluster start valkey cache 16              - start 16 valkey instances (cluster enabled)
@@ -11,9 +12,11 @@
 #   mcluster stop valkey 16                     - stop 16 valkey instances by port
 #   mcluster stop garnet                        - stop all GarnetServer instances
 #   mcluster stop                               - stop all (valkey + garnet)
+#   mcluster update garnet cache                - pull latest configs, regenerate existing configs
+#   mcluster update valkey cache 16             - pull latest configs, regenerate 16 configs
 
 source /tmp/deploy-actions/config.env
-ACTION="${1:?Usage: mcluster [start|stop] <system> <template> <nodes> [--cluster|--no-cluster]}"
+ACTION="${1:?Usage: mcluster [start|stop|update] <system> <template> <nodes> [--cluster|--no-cluster]}"
 CONF_DIR="$HOME/configs"
 CLUSTER_MODE="true"
 
@@ -182,10 +185,41 @@ case "$ACTION" in
     fi
     ;;
 
+  update)
+    SYSTEM="${2:?Usage: mcluster update <system> <template> [nodes] [--cluster|--no-cluster]}"
+    TEMPLATE="${3:?Usage: mcluster update <system> <template> [nodes] [--cluster|--no-cluster]}"
+    NODES="${4:-}"
+    if [ "${5:-}" = "--no-cluster" ]; then
+      CLUSTER_MODE="false"
+    elif [ "${5:-}" = "--cluster" ]; then
+      CLUSTER_MODE="true"
+    fi
+
+    pull_configs
+
+    # Auto-detect node count from existing cluster dir if not specified
+    if [ -z "$NODES" ]; then
+      if [ "$SYSTEM" = "garnet" ]; then
+        UPDATE_DIR="$HOME/garnet-cluster"
+      else
+        UPDATE_DIR="$HOME/valkey-cluster"
+      fi
+      NODES=$(find "$UPDATE_DIR" -maxdepth 1 -type d -name '[0-9]*' 2>/dev/null | wc -l)
+      if [ "$NODES" -eq 0 ]; then
+        echo "ERROR: No existing cluster dir found and no node count specified"
+        exit 1
+      fi
+    fi
+
+    resolve_template "$SYSTEM" "$TEMPLATE" "$NODES"
+    echo "Updated configs in place. Restart instances to apply."
+    ;;
+
   *)
     echo "Unknown action: $ACTION"
     echo "Usage: mcluster start <system> <template> <nodes> [--cluster|--no-cluster]"
     echo "       mcluster stop [system] [nodes]"
+    echo "       mcluster update <system> <template> [nodes] [--cluster|--no-cluster]"
     exit 1
     ;;
 esac
