@@ -109,7 +109,7 @@ start_garnet() {
       echo "  Port $port: already running (skipped)"
       continue
     fi
-    GarnetServer $(cat "$dir/garnet.conf" | grep -v '^#') &
+    GarnetServer --config-import-path="$dir/garnet.conf" &
     echo "  Port $port: started (pid $!)"
   done
 }

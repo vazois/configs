@@ -84,4 +84,17 @@ sysctl -w net.core.netdev_max_backlog=250000
 sysctl -w net.ipv4.tcp_rmem="4096 87380 33554432"
 sysctl -w net.ipv4.tcp_wmem="4096 87380 33554432"
 
-echo "Network setup complete: RSS queues, routing, iptables, and TCP tuning configured."
+# -------------------------------------------------------------
+# 5. File Descriptor Limits
+#    Raise open file limit for high-connection benchmarks.
+# -------------------------------------------------------------
+cat >> /etc/security/limits.conf <<EOF
+* soft nofile 1048576
+* hard nofile 1048576
+root soft nofile 1048576
+root hard nofile 1048576
+EOF
+sysctl -w fs.nr_open=1048576
+sysctl -w fs.file-max=2097152
+
+echo "Network setup complete: RSS queues, routing, iptables, TCP tuning, and fd limits configured."
