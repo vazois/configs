@@ -94,7 +94,7 @@ cat >> /etc/security/limits.conf <<EOF
 root soft nofile 1048576
 root hard nofile 1048576
 EOF
-sysctl -w fs.nr_open=1048576
-sysctl -w fs.file-max=2097152
+sudo sysctl -w fs.nr_open=1048576
+sudo sysctl -w fs.file-max=2097152
 
 echo "Network setup complete: RSS queues, routing, iptables, TCP tuning, and fd limits configured."

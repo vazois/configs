@@ -1,3 +1,4 @@
+#!/usr/bin/env pwsh
 param (
 	[string]$addr,
     [int]$port=7000,

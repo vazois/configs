@@ -137,8 +137,8 @@ function Stop-System {
         if ($Count -gt 0) {
             for ($i = 0; $i -lt $Count; $i++) {
                 $port = $BASE_PORT + $i
-                $pid = bash -c "pgrep -f 'GarnetServer.*--port ${port}'" 2>$null
-                if ($pid) { bash -c "kill $pid"; Write-Host "  Garnet port ${port}: stopped (pid $pid)" }
+                $procId = bash -c "pgrep -f 'GarnetServer.*--port ${port}'" 2>$null
+                if ($procId) { bash -c "kill $procId"; Write-Host "  Garnet port ${port}: stopped (pid $procId)" }
                 else { Write-Host "  Garnet port ${port}: not running" -ForegroundColor DarkGray }
             }
         } else {
@@ -149,8 +149,8 @@ function Stop-System {
         if ($Count -gt 0) {
             for ($i = 0; $i -lt $Count; $i++) {
                 $port = $BASE_PORT + $i
-                $pid = bash -c "pgrep -f 'valkey-server.*:${port}'" 2>$null
-                if ($pid) { bash -c "kill $pid"; Write-Host "  Valkey port ${port}: stopped (pid $pid)" }
+                $procId = bash -c "pgrep -f 'valkey-server.*:${port}'" 2>$null
+                if ($procId) { bash -c "kill $procId"; Write-Host "  Valkey port ${port}: stopped (pid $procId)" }
                 else { Write-Host "  Valkey port ${port}: not running" -ForegroundColor DarkGray }
             }
         } else {
