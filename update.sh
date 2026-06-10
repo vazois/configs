@@ -7,7 +7,8 @@
 
 set -e
 
-REPO_DIR="$HOME/configs"
+SCRIPT_PATH="$(realpath "${BASH_SOURCE[0]:-$0}")"
+REPO_DIR="$(dirname "$SCRIPT_PATH")"
 MANIFEST="$REPO_DIR/manifest.json"
 DO_PULL=false
 DO_RUN=false
