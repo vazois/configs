@@ -11,7 +11,8 @@
 #>
 param(
     [switch]$Pull,
-    [switch]$Run
+    [switch]$Run,
+    [switch]$RunOnly
 )
 
 $ErrorActionPreference = "Stop"
@@ -30,34 +31,37 @@ if (-not (Test-Path $Manifest)) {
     throw "ERROR: $Manifest not found"
 }
 
-Write-Host "Copying scripts to deployed locations..."
-
 $entries = Get-Content $Manifest -Raw | ConvertFrom-Json
 
-# Ensure target directories exist (derive from manifest destinations)
-$dirs = $entries.scripts | ForEach-Object { Split-Path $_.dst -Parent } | Sort-Object -Unique
-foreach ($dir in $dirs) {
-    sudo mkdir -p $dir 2>$null
-}
+# Copy scripts to deployed locations (skip with -RunOnly)
+if (-not $RunOnly) {
+    Write-Host "Copying scripts to deployed locations..."
 
-foreach ($entry in $entries.scripts) {
-    $src = "$RepoDir/$($entry.src)"
-    $dst = $entry.dst
-    $mode = $entry.mode
-
-    if (Test-Path $src) {
-        sudo cp $src $dst
-        sudo chmod $mode $dst
-        Write-Host "  $dst" -ForegroundColor DarkGray
-    } else {
-        Write-Host "  SKIP: $($entry.src) (not found)" -ForegroundColor Yellow
+    # Ensure target directories exist (derive from manifest destinations)
+    $dirs = $entries.scripts | ForEach-Object { Split-Path $_.dst -Parent } | Sort-Object -Unique
+    foreach ($dir in $dirs) {
+        sudo mkdir -p $dir 2>$null
     }
+
+    foreach ($entry in $entries.scripts) {
+        $src = "$RepoDir/$($entry.src)"
+        $dst = $entry.dst
+        $mode = $entry.mode
+
+        if (Test-Path $src) {
+            sudo cp $src $dst
+            sudo chmod $mode $dst
+            Write-Host "  $dst" -ForegroundColor DarkGray
+        } else {
+            Write-Host "  SKIP: $($entry.src) (not found)" -ForegroundColor Yellow
+        }
+    }
+
+    Write-Host "Scripts updated." -ForegroundColor Green
 }
 
-Write-Host "Scripts updated." -ForegroundColor Green
-
-# Execute runcmd section if -Run is passed
-if ($Run) {
+# Execute runcmd section if -Run or -RunOnly is passed
+if ($Run -or $RunOnly) {
     if (-not $entries.runcmd) {
         Write-Host "No runcmd section in manifest. Skipping."
         return

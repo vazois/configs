@@ -12,11 +12,13 @@ REPO_DIR="$(dirname "$SCRIPT_PATH")"
 MANIFEST="$REPO_DIR/manifest.json"
 DO_PULL=false
 DO_RUN=false
+DO_COPY=true
 
 for arg in "$@"; do
   case "$arg" in
-    --pull) DO_PULL=true ;;
-    --run)  DO_RUN=true ;;
+    --pull)     DO_PULL=true ;;
+    --run)      DO_RUN=true ;;
+    --run-only) DO_RUN=true; DO_COPY=false ;;
   esac
 done
 
@@ -30,29 +32,32 @@ if [ ! -f "$MANIFEST" ]; then
   exit 1
 fi
 
-echo "Copying scripts to deployed locations..."
+# Copy scripts to deployed locations (skip with --run-only)
+if [ "$DO_COPY" = true ]; then
+  echo "Copying scripts to deployed locations..."
 
-# Ensure target directories exist (derive from manifest destinations)
-jq -r '.scripts[].dst' "$MANIFEST" | xargs -n1 dirname | sort -u | while read -r dir; do
-  sudo mkdir -p "$dir"
-done
+  # Ensure target directories exist (derive from manifest destinations)
+  jq -r '.scripts[].dst' "$MANIFEST" | xargs -n1 dirname | sort -u | while read -r dir; do
+    sudo mkdir -p "$dir"
+  done
 
-# Read manifest and copy each entry
-jq -c '.scripts[]' "$MANIFEST" | while read -r entry; do
-  src="$REPO_DIR/$(echo "$entry" | jq -r '.src')"
-  dst=$(echo "$entry" | jq -r '.dst')
-  mode=$(echo "$entry" | jq -r '.mode')
+  # Read manifest and copy each entry
+  jq -c '.scripts[]' "$MANIFEST" | while read -r entry; do
+    src="$REPO_DIR/$(echo "$entry" | jq -r '.src')"
+    dst=$(echo "$entry" | jq -r '.dst')
+    mode=$(echo "$entry" | jq -r '.mode')
 
-  if [ -f "$src" ]; then
-    sudo cp "$src" "$dst"
-    sudo chmod "$mode" "$dst"
-    echo "  $dst"
-  else
-    echo "  SKIP: $src (not found)"
-  fi
-done
+    if [ -f "$src" ]; then
+      sudo cp "$src" "$dst"
+      sudo chmod "$mode" "$dst"
+      echo "  $dst"
+    else
+      echo "  SKIP: $src (not found)"
+    fi
+  done
 
-echo "Scripts updated."
+  echo "Scripts updated."
+fi
 
 # Execute runcmd section if --run is passed
 if [ "$DO_RUN" = true ]; then
