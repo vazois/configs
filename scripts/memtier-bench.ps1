@@ -5,8 +5,9 @@
 
 .EXAMPLE
     memtier-bench.ps1 -Address 10.5.0.4 -Port 6379
-    memtier-bench.ps1 -Address 10.5.0.4 -Port 6379 -Threads 64 -Clients 32 -SkipLoad
-    memtier-bench.ps1 -Address 10.5.0.4 -Port 7000 -Pipeline 512 -DbSize 1000000 -DataSize 128 -TestTime 30
+    memtier-bench.ps1 -Address 10.5.0.4 -Port 7000 -Cluster
+    memtier-bench.ps1 -Address 10.5.0.4 -Port 7000 -Cluster -Threads 64 -Clients 32 -SkipLoad
+    memtier-bench.ps1 -Address 10.5.0.4 -Port 7000 -Cluster -Pipeline 512 -DbSize 1000000 -DataSize 128 -TestTime 30
 #>
 param(
     [Parameter(Mandatory)][string]$Address,
@@ -17,27 +18,22 @@ param(
     [long]$DbSize = 268435456,
     [int]$DataSize = 8,
     [int]$TestTime = 15,
+    [switch]$Cluster,
     [switch]$SkipLoad
 )
 
 $ErrorActionPreference = "Stop"
+$clusterFlag = if ($Cluster) { "--cluster-mode" } else { "" }
 
 # Phase 1: Load keys
 if (-not $SkipLoad) {
     Write-Host "==== Loading keys ====" -ForegroundColor Yellow
-    memtier_benchmark -s $Address `
-        --port=$Port `
-        --ratio=1:0 `
-        --pipeline=$Pipeline `
-        --data-size=$DataSize `
-        --clients=$Clients `
-        --threads=$Threads `
-        --key-minimum=1 `
-        --key-maximum=$DbSize `
-        --key-pattern=P:P `
-        --run-count=1 `
-        --hide-histogram `
-        --requests=allkeys
+    $loadArgs = @("-s", $Address, "--port=$Port", "--ratio=1:0", "--pipeline=$Pipeline",
+        "--data-size=$DataSize", "--clients=$Clients", "--threads=$Threads",
+        "--key-minimum=1", "--key-maximum=$DbSize", "--key-pattern=P:P",
+        "--run-count=1", "--hide-histogram", "--requests=allkeys")
+    if ($Cluster) { $loadArgs += "--cluster-mode" }
+    & memtier_benchmark @loadArgs
     if ($LASTEXITCODE -ne 0) { throw "Load phase failed" }
 } else {
     Write-Host "==== Skipping load phase ====" -ForegroundColor DarkGray
@@ -49,19 +45,12 @@ Write-Host "==== Running benchmark ====" -ForegroundColor Yellow
 $allResults = @()
 
 for ($i = $Threads; $i -le $Threads; $i *= 2) {
-    $output = memtier_benchmark -s $Address `
-        --port=$Port `
-        --ratio=1:9 `
-        --pipeline=$Pipeline `
-        --data-size=$DataSize `
-        --clients=$Clients `
-        --threads=$i `
-        --test-time=$TestTime `
-        --run-count=1 `
-        --hide-histogram `
-        --key-minimum=1 `
-        --key-maximum=$DbSize `
-        --key-pattern=R:R 2>&1 | Tee-Object -Variable rawOutput
+    $benchArgs = @("-s", $Address, "--port=$Port", "--ratio=1:9", "--pipeline=$Pipeline",
+        "--data-size=$DataSize", "--clients=$Clients", "--threads=$i",
+        "--test-time=$TestTime", "--run-count=1", "--hide-histogram",
+        "--key-minimum=1", "--key-maximum=$DbSize", "--key-pattern=R:R")
+    if ($Cluster) { $benchArgs += "--cluster-mode" }
+    $rawOutput = & memtier_benchmark @benchArgs 2>&1
 
     $rawOutput | ForEach-Object { Write-Host $_ }
     $totals = $rawOutput | Where-Object { $_ -match "Totals" } | Select-Object -Last 1

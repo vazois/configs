@@ -1,7 +1,7 @@
 #!/bin/bash
 set -e
 
-# Usage: memtier-bench <address> <port> [threads] [clients] [pipeline] [dbSize] [dataSize] [testTime] [skip-load]
+# Usage: memtier-bench <address> <port> [threads] [clients] [pipeline] [dbSize] [dataSize] [testTime] [skip-load] [cluster]
 #   address   - server IP to benchmark
 #   port      - server port
 #   threads   - number of threads (default: 128)
@@ -11,9 +11,10 @@ set -e
 #   dataSize  - value size in bytes (default: 8)
 #   testTime  - benchmark duration in seconds (default: 15)
 #   skip-load - pass "skip" to skip the key loading phase
+#   cluster   - pass "cluster" to enable --cluster-mode
 
-address=${1:?Usage: memtier-bench <address> <port> [threads] [clients] [pipeline] [dbSize] [dataSize] [testTime] [skip-load]}
-port=${2:?Usage: memtier-bench <address> <port> [threads] [clients] [pipeline] [dbSize] [dataSize] [testTime] [skip-load]}
+address=${1:?Usage: memtier-bench <address> <port> [threads] [clients] [pipeline] [dbSize] [dataSize] [testTime] [skip-load] [cluster]}
+port=${2:?Usage: memtier-bench <address> <port> [threads] [clients] [pipeline] [dbSize] [dataSize] [testTime] [skip-load] [cluster]}
 startThreads=${3:-128}
 endThreads=$startThreads
 clients=${4:-64}
@@ -22,8 +23,14 @@ dbSize=${6:-1048576}
 dataSize=${7:-8}
 testTime=${8:-15}
 skipLoad=${9:-""}
+clusterOpt=${10:-""}
 
-# Phase 1: Load keys (skip if "skip" is passed as 5th arg)
+CLUSTER_FLAG=""
+if [ "$clusterOpt" = "cluster" ]; then
+  CLUSTER_FLAG="--cluster-mode"
+fi
+
+# Phase 1: Load keys (skip if "skip" is passed as 9th arg)
 if [ "$skipLoad" != "skip" ]; then
   echo "==== Loading keys ===="
   memtier_benchmark -s $address \
@@ -38,7 +45,8 @@ if [ "$skipLoad" != "skip" ]; then
       --key-pattern=P:P \
       --run-count=1 \
       --hide-histogram \
-      --requests=allkeys
+      --requests=allkeys \
+      $CLUSTER_FLAG
 else
   echo "==== Skipping load phase ===="
 fi
@@ -62,6 +70,7 @@ do
         --key-minimum=1 \
         --key-maximum=$dbSize \
         --key-pattern=R:R \
+        $CLUSTER_FLAG \
         2>&1 | tee /tmp/memtier-last-run.txt
 
         result=$(grep "Totals" /tmp/memtier-last-run.txt | tail -n 1)
