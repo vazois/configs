@@ -1,6 +1,6 @@
 #!/bin/bash
 set -e
-source /tmp/deploy-actions/config.env
+source /opt/deploy-actions/config.env
 VAULT_ARG="$1"
 SECRET_NAME="${2:-github-pat}"
 PAT=""
@@ -24,4 +24,4 @@ while IFS='|' read -r visibility url target; do
   else
     sudo -u $DEPLOY_USER git clone "$url" "$target"
   fi
-done < /tmp/deploy-actions/repos.txt
+done < /opt/deploy-actions/repos.txt

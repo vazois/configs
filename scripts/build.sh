@@ -9,7 +9,7 @@
 #   build.sh garnet main         - checkout main and build
 #   build.sh memtier             - build memtier_benchmark
 set -e
-source /tmp/deploy-actions/config.env
+source /opt/deploy-actions/config.env
 
 SYSTEM="${1:?Usage: build.sh <system> [branch] [tls]}"
 BRANCH="${2:-}"

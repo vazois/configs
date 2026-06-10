@@ -30,7 +30,7 @@ if (-not (Test-Path $Manifest)) {
 Write-Host "Copying scripts to deployed locations..."
 
 # Ensure target directories exist
-sudo mkdir -p /tmp/deploy-actions 2>$null
+sudo mkdir -p /opt/deploy-actions 2>$null
 
 $entries = Get-Content $Manifest -Raw | ConvertFrom-Json
 

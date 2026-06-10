@@ -5,7 +5,7 @@
 #   setup-cluster-dir.sh valkey 16    - create ~/valkey-cluster/ with 16 port folders
 #   setup-cluster-dir.sh garnet       - create ~/garnet-cluster/ (single folder)
 set -e
-source /tmp/deploy-actions/config.env
+source /opt/deploy-actions/config.env
 
 SYSTEM="${1:?Usage: setup-cluster-dir.sh <system> [nodes]}"
 NUM_NODES="${2:-$(nproc)}"

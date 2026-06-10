@@ -1,5 +1,5 @@
 #!/bin/bash
-source /tmp/deploy-actions/config.env
+source /opt/deploy-actions/config.env
 
 # Fetch VMSS SSH private key from Azure Key Vault using managed identity.
 # The public key is already in authorized_keys via osProfile.ssh.publicKeys.

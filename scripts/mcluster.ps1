@@ -22,7 +22,7 @@ param(
 $ErrorActionPreference = "Stop"
 
 # Load config
-$configFile = "/tmp/deploy-actions/config.env"
+$configFile = "/opt/deploy-actions/config.env"
 if (Test-Path $configFile) {
     Get-Content $configFile | ForEach-Object {
         if ($_ -match '^\s*([A-Z_]+)="?([^"]*)"?\s*$' -and $_ -notmatch '^\s*#') {
