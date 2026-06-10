@@ -126,6 +126,7 @@ function Start-Garnet {
         $running = bash -c "pgrep -f 'GarnetServer.*--port ${port}'" 2>$null
         if ($running) { Write-Host "  Port ${port}: already running (skipped)" -ForegroundColor DarkGray; continue }
 
+        Set-Location $dir
         bash -c "GarnetServer --config-import-path='$conf' &"
         Write-Host "  Port ${port}: started" -ForegroundColor Cyan
     }
