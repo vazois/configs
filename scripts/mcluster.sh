@@ -15,10 +15,11 @@
 #   mcluster update garnet cache                - pull latest configs, regenerate existing configs
 #   mcluster update valkey cache 16             - pull latest configs, regenerate 16 configs
 
-source /tmp/deploy-actions/config.env
+source /opt/deploy-actions/config.env
 ACTION="${1:?Usage: mcluster [start|stop|update] <system> <template> <nodes> [--cluster|--no-cluster]}"
 CONF_DIR="$HOME/configs"
 CLUSTER_MODE="true"
+TOTAL_CORES=$(nproc)
 
 pull_configs() {
   if [ -d "$CONF_DIR/.git" ]; then
@@ -79,7 +80,21 @@ resolve_template() {
 start_valkey() {
   local nodes="$1"
   local cluster_dir="$HOME/valkey-cluster"
+  local irq_cores=$(( nodes * 2 ))
+  local cores_per_instance=6
+  local required_cores=$(( irq_cores + nodes * cores_per_instance ))
+
+  if [ "$required_cores" -gt "$TOTAL_CORES" ]; then
+    echo "ERROR: Need $required_cores cores ($irq_cores IRQ + $nodes×$cores_per_instance valkey) but only $TOTAL_CORES available"
+    exit 1
+  fi
+
+  # Apply valkey network profile (RSS queues, IRQ pinning, stop irqbalance)
+  echo "Applying valkey network profile ($nodes instances, $irq_cores IRQ cores)..."
+  sudo /opt/deploy-actions/setup-network.sh valkey "$nodes"
+
   echo "Starting $nodes valkey-server instances (ports ${BASE_PORT}-$(( BASE_PORT + nodes - 1 )))..."
+  echo "  CPU layout: IRQ cores 0-$(( irq_cores - 1 )), then $cores_per_instance cores per instance"
   for (( i=0; i<nodes; i++ )); do
     local port=$(( BASE_PORT + i ))
     local dir="$cluster_dir/$port"
@@ -91,15 +106,22 @@ start_valkey() {
       echo "  Port $port: already running (skipped)"
       continue
     fi
+    local cpu_start=$(( irq_cores + i * cores_per_instance ))
+    local cpu_end=$(( cpu_start + cores_per_instance - 1 ))
     cd "$dir"
-    valkey-server "$dir/valkey.conf"
-    echo "  Port $port: started"
+    taskset -c ${cpu_start}-${cpu_end} valkey-server "$dir/valkey.conf"
+    echo "  Port $port: started (pinned to CPU ${cpu_start}-${cpu_end})"
   done
 }
 
 start_garnet() {
   local nodes="$1"
   local cluster_dir="$HOME/garnet-cluster"
+
+  # Apply garnet network profile (maximize RSS queues, spread IRQs)
+  echo "Applying garnet network profile..."
+  sudo /opt/deploy-actions/setup-network.sh garnet "$nodes"
+
   echo "Starting $nodes GarnetServer instance(s)..."
   for (( i=0; i<nodes; i++ )); do
     local port=$(( BASE_PORT + i ))
@@ -113,7 +135,7 @@ start_garnet() {
       continue
     fi
     GarnetServer --config-import-path="$dir/garnet.conf" &
-    echo "  Port $port: started (pid $!)"
+    echo "  Port $port: started (pid $!, using all cores)"
   done
 }
 

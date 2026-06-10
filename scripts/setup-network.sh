@@ -1,32 +1,109 @@
 #!/bin/bash
 set -e
-source /tmp/deploy-actions/config.env
+source /opt/deploy-actions/config.env
 
 # =============================================================
 # Network configuration script for Azure VMSS instances.
 # Configures eth1 (secondary NIC) for cross-VM communication
 # used in Redis/Valkey/Garnet benchmarking scenarios.
+#
+# Usage:
+#   setup-network.sh [engine] [nodes]
+#     engine - "valkey" or "garnet" (default: garnet)
+#     nodes  - number of instances (default: 1, used for valkey IRQ scaling)
+#
+# Engine profiles:
+#   valkey: limit RSS queues to nodes*2, pin IRQs to first nodes*2 cores, stop irqbalance
+#   garnet: maximize RSS queues, spread IRQs across all cores (inline processing)
 # =============================================================
 
+ENGINE="${1:-garnet}"
+NODES="${2:-1}"
+TOTAL_CORES=$(nproc)
+
 # -------------------------------------------------------------
-# 1. RSS Queue Maximization
-#    Azure defaults to a small number of RSS queues. This spreads
-#    NIC interrupts across all available cores for max throughput.
+# 1. Engine-Specific RSS & IRQ Configuration
 # -------------------------------------------------------------
-for NIC in eth0 eth1; do
-  if [ -d "/sys/class/net/$NIC" ]; then
-    MAX_Q=$(ethtool -l $NIC 2>/dev/null | grep -m1 "Combined:" | awk '{print $2}')
-    if [ -n "$MAX_Q" ] && [ "$MAX_Q" -gt 0 ]; then
-      CURRENT_Q=$(ethtool -l $NIC | grep -A4 "Current" | grep "Combined:" | awk '{print $2}')
-      if [ "$CURRENT_Q" -lt "$MAX_Q" ]; then
-        echo "[$NIC] Setting RSS queues from $CURRENT_Q to $MAX_Q"
-        ethtool -L $NIC combined $MAX_Q
-      else
-        echo "[$NIC] Already at max RSS queues ($MAX_Q)"
+configure_irq_valkey() {
+  local irq_cores=$(( NODES * 2 ))
+  if [ "$irq_cores" -ge "$TOTAL_CORES" ]; then
+    echo "ERROR: IRQ cores ($irq_cores) >= total cores ($TOTAL_CORES). Reduce node count."
+    exit 1
+  fi
+
+  echo "[valkey] Configuring $irq_cores RSS queues for $NODES instances on $TOTAL_CORES cores"
+
+  # Set RSS queues to nodes*2
+  if [ -d "/sys/class/net/$IFACE" ]; then
+    local max_q=$(ethtool -l $IFACE 2>/dev/null | grep -m1 "Combined:" | awk '{print $2}')
+    local target_q=$irq_cores
+    if [ "$target_q" -gt "$max_q" ]; then
+      echo "  WARNING: Requested $target_q queues but max is $max_q, using $max_q"
+      target_q=$max_q
+    fi
+    echo "  [$IFACE] Setting RSS queues to $target_q"
+    ethtool -L $IFACE combined $target_q
+  fi
+
+  # Pin each IRQ to a dedicated core (0 through irq_cores-1)
+  local irqs=($(grep -w "$IFACE" /proc/interrupts | awk '{gsub(":",""); print $1}'))
+  local cpu=0
+  for irq in "${irqs[@]}"; do
+    if [ "$cpu" -ge "$irq_cores" ]; then
+      break
+    fi
+    echo "$cpu" > /proc/irq/$irq/smp_affinity_list
+    echo "  IRQ $irq -> CPU $cpu"
+    cpu=$((cpu + 1))
+  done
+
+  # Stop irqbalance to prevent it from overriding our pinning
+  systemctl stop irqbalance 2>/dev/null || true
+  systemctl disable irqbalance 2>/dev/null || true
+  echo "  irqbalance stopped and disabled"
+}
+
+configure_irq_garnet() {
+  echo "[garnet] Maximizing RSS queues for inline processing on $TOTAL_CORES cores"
+
+  # Maximize RSS queues — spread across all cores
+  for NIC in eth0 $IFACE; do
+    if [ -d "/sys/class/net/$NIC" ]; then
+      local max_q=$(ethtool -l $NIC 2>/dev/null | grep -m1 "Combined:" | awk '{print $2}')
+      if [ -n "$max_q" ] && [ "$max_q" -gt 0 ]; then
+        local current_q=$(ethtool -l $NIC | grep -A4 "Current" | grep "Combined:" | awk '{print $2}')
+        if [ "$current_q" -lt "$max_q" ]; then
+          echo "  [$NIC] Setting RSS queues from $current_q to $max_q"
+          ethtool -L $NIC combined $max_q
+        else
+          echo "  [$NIC] Already at max RSS queues ($max_q)"
+        fi
       fi
     fi
-  fi
-done
+  done
+
+  # Spread IRQ affinity across all cores (round-robin)
+  local irqs=($(grep -w "$IFACE" /proc/interrupts | awk '{gsub(":",""); print $1}'))
+  local cpu=0
+  for irq in "${irqs[@]}"; do
+    echo "$cpu" > /proc/irq/$irq/smp_affinity_list
+    echo "  IRQ $irq -> CPU $cpu"
+    cpu=$(( (cpu + 1) % TOTAL_CORES ))
+  done
+}
+
+case "$ENGINE" in
+  valkey)
+    configure_irq_valkey
+    ;;
+  garnet)
+    configure_irq_garnet
+    ;;
+  *)
+    echo "Unknown engine: $ENGINE (expected 'valkey' or 'garnet')"
+    exit 1
+    ;;
+esac
 
 # -------------------------------------------------------------
 # 2. Policy-Based Routing for eth1
@@ -97,4 +174,4 @@ EOF
 sudo sysctl -w fs.nr_open=1048576
 sudo sysctl -w fs.file-max=2097152
 
-echo "Network setup complete: RSS queues, routing, iptables, TCP tuning, and fd limits configured."
+echo "Network setup complete ($ENGINE mode, $NODES nodes): RSS/IRQ, routing, iptables, TCP tuning, fd limits."
