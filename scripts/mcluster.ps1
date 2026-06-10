@@ -49,7 +49,8 @@ function Pull-Configs {
 
 function Get-Eth1Ip {
     $output = ip -4 addr show $IFACE 2>$null
-    if ($output -match 'inet\s+([\d.]+)') { return $Matches[1] }
+    $inetLine = $output | Where-Object { $_ -match 'inet\s+([\d.]+)' } | Select-Object -First 1
+    if ($inetLine -match 'inet\s+([\d.]+)') { return $Matches[1] }
     throw "ERROR: Could not determine $IFACE IP"
 }
 
