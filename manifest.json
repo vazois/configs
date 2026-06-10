@@ -1,0 +1,17 @@
+{
+  "scripts": [
+    { "src": "scripts/config.env",          "dst": "/tmp/deploy-actions/config.env",          "mode": "644" },
+    { "src": "scripts/install-dotnet.sh",   "dst": "/tmp/deploy-actions/install-dotnet.sh",   "mode": "755" },
+    { "src": "scripts/repos.txt",           "dst": "/tmp/deploy-actions/repos.txt",           "mode": "644" },
+    { "src": "scripts/setup-network.sh",    "dst": "/tmp/deploy-actions/setup-network.sh",    "mode": "755" },
+    { "src": "scripts/setup-ssh-keys.sh",   "dst": "/tmp/deploy-actions/setup-ssh-keys.sh",   "mode": "755" },
+    { "src": "scripts/clone-repos.sh",      "dst": "/tmp/deploy-actions/clone-repos.sh",      "mode": "755" },
+    { "src": "scripts/build.sh",            "dst": "/tmp/deploy-actions/build.sh",            "mode": "755" },
+    { "src": "scripts/setup-cluster-dir.sh","dst": "/tmp/deploy-actions/setup-cluster-dir.sh","mode": "755" },
+    { "src": "scripts/memtier-bench.sh",    "dst": "/usr/local/bin/memtier-bench",            "mode": "755" },
+    { "src": "scripts/mcluster.sh",         "dst": "/usr/local/bin/mcluster",                 "mode": "755" },
+    { "src": "scripts/simple-setup.ps1",    "dst": "/usr/local/bin/simple-setup.ps1",         "mode": "755" },
+    { "src": "scripts/memtier-bench.ps1",   "dst": "/usr/local/bin/memtier-bench.ps1",        "mode": "755" },
+    { "src": "scripts/mcluster.ps1",        "dst": "/usr/local/bin/mcluster.ps1",             "mode": "755" }
+  ]
+}
