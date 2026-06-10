@@ -64,9 +64,12 @@ for ($i = $Threads; $i -le $Threads; $i *= 2) {
         "--test-time=$TestTime", "--run-count=1", "--hide-histogram",
         "--key-minimum=1", "--key-maximum=$DbSize", "--key-pattern=R:R")
     if ($Cluster) { $benchArgs += "--cluster-mode" }
-    $rawOutput = & memtier_benchmark @benchArgs 2>&1
 
-    $rawOutput | ForEach-Object { Write-Host $_ }
+    # Stream output live and capture for summary
+    $outputFile = "/tmp/memtier-last-run.txt"
+    & memtier_benchmark @benchArgs 2>&1 | Tee-Object -FilePath $outputFile
+    $rawOutput = Get-Content $outputFile
+
     $totals = $rawOutput | Where-Object { $_ -match "Totals" } | Select-Object -Last 1
     if ($totals) {
         Write-Host "$i $totals" -ForegroundColor Cyan

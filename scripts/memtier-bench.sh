@@ -85,7 +85,7 @@ do
         --key-maximum=$dbSize \
         --key-pattern=R:R \
         $CLUSTER_FLAG \
-        2>&1 | tee /tmp/memtier-last-run.txt
+        2>&1 | stdbuf -oL tee /tmp/memtier-last-run.txt
 
         result=$(grep "Totals" /tmp/memtier-last-run.txt | tail -n 1)
         echo "$i $result"
