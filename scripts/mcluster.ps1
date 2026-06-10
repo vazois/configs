@@ -107,7 +107,7 @@ function Start-Valkey {
         if ($running) { Write-Host "  Port ${port}: already running (skipped)" -ForegroundColor DarkGray; continue }
 
         Set-Location $dir
-        bash -c "valkey-server '$conf'" | Out-Null
+        bash -c "valkey-server '$conf' --daemonize yes --logfile '$dir/valkey.log' --pidfile '$dir/valkey.pid'"
         Write-Host "  Port ${port}: started" -ForegroundColor Cyan
     }
 }
