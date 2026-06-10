@@ -25,6 +25,20 @@ param(
 $ErrorActionPreference = "Stop"
 $clusterFlag = if ($Cluster) { "--cluster-mode" } else { "" }
 
+# Print parameters for this run
+Write-Host "==== Parameters ====" -ForegroundColor Yellow
+Write-Host "  Address:    $Address"
+Write-Host "  Port:       $Port"
+Write-Host "  Threads:    $Threads"
+Write-Host "  Clients:    $Clients"
+Write-Host "  Pipeline:   $Pipeline"
+Write-Host "  DbSize:     $DbSize"
+Write-Host "  DataSize:   $DataSize"
+Write-Host "  TestTime:   $TestTime"
+Write-Host "  SkipLoad:   $SkipLoad"
+Write-Host "  Cluster:    $Cluster"
+Write-Host ""
+
 # Phase 1: Load keys
 if (-not $SkipLoad) {
     Write-Host "==== Loading keys ====" -ForegroundColor Yellow

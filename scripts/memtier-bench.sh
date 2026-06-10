@@ -30,6 +30,20 @@ if [ "$clusterOpt" = "cluster" ]; then
   CLUSTER_FLAG="--cluster-mode"
 fi
 
+# Print parameters for this run
+echo "==== Parameters ===="
+echo "  address:    $address"
+echo "  port:       $port"
+echo "  threads:    $startThreads"
+echo "  clients:    $clients"
+echo "  pipeline:   $pipeline"
+echo "  dbSize:     $dbSize"
+echo "  dataSize:   $dataSize"
+echo "  testTime:   $testTime"
+echo "  skipLoad:   ${skipLoad:-no}"
+echo "  cluster:    ${clusterOpt:-no}"
+echo ""
+
 # Phase 1: Load keys (skip if "skip" is passed as 9th arg)
 if [ "$skipLoad" != "skip" ]; then
   echo "==== Loading keys ===="
