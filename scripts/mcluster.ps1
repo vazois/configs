@@ -1,22 +1,26 @@
 #!/usr/bin/env pwsh
 <#
 .SYNOPSIS
-    Manage valkey/garnet cluster instances: start, stop, or update configs.
+    Manage valkey/garnet cluster instances: start, stop, clean, or update configs.
 
 .EXAMPLE
     mcluster.ps1 -Action start -System valkey -Template cache -Nodes 16
+    mcluster.ps1 -Action start -System valkey -Template cache -Nodes 16 -Clean
     mcluster.ps1 -Action start -System garnet -Template cache -Nodes 1 -NoCluster
     mcluster.ps1 -Action stop -System valkey -Nodes 16
     mcluster.ps1 -Action stop
+    mcluster.ps1 -Action clean -System valkey
+    mcluster.ps1 -Action clean
     mcluster.ps1 -Action update -System garnet -Template cache
     mcluster.ps1 -Action update -System valkey -Template cache -Nodes 16 -NoCluster
 #>
 param(
-    [Parameter(Mandatory)][ValidateSet("start","stop","update")][string]$Action,
+    [Parameter(Mandatory)][ValidateSet("start","stop","update","clean")][string]$Action,
     [string]$System,
     [string]$Template,
     [int]$Nodes = 0,
-    [switch]$NoCluster
+    [switch]$NoCluster,
+    [switch]$Clean
 )
 
 $ErrorActionPreference = "Stop"
@@ -132,31 +136,71 @@ function Start-Garnet {
     }
 }
 
+function Clean-System {
+    param([string]$Sys)
+    if ($Sys -eq "garnet" -or [string]::IsNullOrEmpty($Sys)) {
+        $garnetDir = "$HOME/garnet-cluster"
+        if (Test-Path $garnetDir) {
+            Remove-Item -Recurse -Force $garnetDir
+            Write-Host "  Removed $garnetDir"
+        } else {
+            Write-Host "  $garnetDir does not exist (skipped)" -ForegroundColor DarkGray
+        }
+    }
+    if ($Sys -eq "valkey" -or [string]::IsNullOrEmpty($Sys)) {
+        $valkeyDir = "$HOME/valkey-cluster"
+        if (Test-Path $valkeyDir) {
+            Remove-Item -Recurse -Force $valkeyDir
+            Write-Host "  Removed $valkeyDir"
+        } else {
+            Write-Host "  $valkeyDir does not exist (skipped)" -ForegroundColor DarkGray
+        }
+    }
+}
+
 function Stop-System {
     param([string]$Sys, [int]$Count)
     if ($Sys -eq "garnet") {
         if ($Count -gt 0) {
             for ($i = 0; $i -lt $Count; $i++) {
                 $port = $BASE_PORT + $i
-                $procId = bash -c "pgrep -f 'GarnetServer.*--port ${port}'" 2>$null
+                $procId = (bash -c "pgrep -f 'GarnetServer.*--port ${port}'" 2>$null).Trim()
                 if ($procId) { bash -c "kill $procId"; Write-Host "  Garnet port ${port}: stopped (pid $procId)" }
                 else { Write-Host "  Garnet port ${port}: not running" -ForegroundColor DarkGray }
             }
         } else {
-            bash -c "pkill -f GarnetServer" 2>$null
-            Write-Host "All GarnetServer instances stopped."
+            $pids = (bash -c "pgrep -f GarnetServer" 2>$null).Trim() -split "`n" | Where-Object { $_ }
+            if ($pids) {
+                foreach ($pid in $pids) {
+                    $portMatch = bash -c "ps -p $pid -o args= 2>/dev/null" | Select-String -Pattern '--port (\d+)'
+                    $port = if ($portMatch) { $portMatch.Matches[0].Groups[1].Value } else { "?" }
+                    bash -c "kill $pid"
+                    Write-Host "  GarnetServer port ${port}: stopped (pid $pid)"
+                }
+            } else {
+                Write-Host "  No GarnetServer running." -ForegroundColor DarkGray
+            }
         }
     } else {
         if ($Count -gt 0) {
             for ($i = 0; $i -lt $Count; $i++) {
                 $port = $BASE_PORT + $i
-                $procId = bash -c "pgrep -f 'valkey-server.*:${port}'" 2>$null
+                $procId = (bash -c "pgrep -f 'valkey-server.*:${port}'" 2>$null).Trim()
                 if ($procId) { bash -c "kill $procId"; Write-Host "  Valkey port ${port}: stopped (pid $procId)" }
                 else { Write-Host "  Valkey port ${port}: not running" -ForegroundColor DarkGray }
             }
         } else {
-            bash -c "pkill -f valkey-server" 2>$null
-            Write-Host "All valkey-server instances stopped."
+            $pids = (bash -c "pgrep -f valkey-server" 2>$null).Trim() -split "`n" | Where-Object { $_ }
+            if ($pids) {
+                foreach ($pid in $pids) {
+                    $portMatch = bash -c "ps -p $pid -o args= 2>/dev/null" | Select-String -Pattern ':(\d+)'
+                    $port = if ($portMatch) { $portMatch.Matches[0].Groups[1].Value } else { "?" }
+                    bash -c "kill $pid"
+                    Write-Host "  valkey-server port ${port}: stopped (pid $pid)"
+                }
+            } else {
+                Write-Host "  No valkey-server running." -ForegroundColor DarkGray
+            }
         }
     }
 }
@@ -167,6 +211,11 @@ switch ($Action) {
         if (-not $System) { throw "Usage: mcluster.ps1 -Action start -System <system> -Template <template> -Nodes <n>" }
         if (-not $Template) { throw "Usage: mcluster.ps1 -Action start -System <system> -Template <template> -Nodes <n>" }
         if ($Nodes -le 0) { throw "Usage: mcluster.ps1 -Action start -System <system> -Template <template> -Nodes <n>" }
+
+        if ($Clean) {
+            Write-Host "Cleaning $System cluster directory..."
+            Clean-System -Sys $System
+        }
 
         Pull-Configs
         Resolve-Template -Sys $System -Tmpl $Template -Count $Nodes
@@ -179,12 +228,18 @@ switch ($Action) {
     "stop" {
         if (-not $System) {
             Write-Host "Stopping all instances..."
-            bash -c "pkill -f valkey-server" 2>$null; Write-Host "  valkey-server stopped." -ForegroundColor Cyan
-            bash -c "pkill -f GarnetServer" 2>$null; Write-Host "  GarnetServer stopped." -ForegroundColor Cyan
+            Stop-System -Sys "valkey" -Count 0
+            Stop-System -Sys "garnet" -Count 0
             Write-Host "Done." -ForegroundColor Green
         } else {
             Stop-System -Sys $System -Count $Nodes
         }
+    }
+
+    "clean" {
+        Write-Host "Cleaning cluster directories..."
+        Clean-System -Sys $System
+        Write-Host "Done." -ForegroundColor Green
     }
 
     "update" {

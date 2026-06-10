@@ -1,17 +1,22 @@
 #!/bin/bash
 # Usage:
-#   mcluster start <system> <template> <nodes> [--cluster|--no-cluster]
+#   mcluster start <system> <template> <nodes> [--cluster|--no-cluster] [--clean]
 #   mcluster stop [system] [nodes]
+#   mcluster clean [system]
 #   mcluster update <system> <template> [nodes] [--cluster|--no-cluster]
 #
 # Examples:
 #   mcluster start valkey cache 16              - start 16 valkey instances (cluster enabled)
 #   mcluster start valkey cache 16 --no-cluster - start 16 valkey instances (standalone)
+#   mcluster start valkey cache 16 --clean      - clean dirs, then start 16 instances
 #   mcluster start garnet cache 1               - start 1 GarnetServer (cluster enabled)
 #   mcluster start garnet cache 1 --no-cluster  - start 1 GarnetServer (cluster disabled)
 #   mcluster stop valkey 16                     - stop 16 valkey instances by port
 #   mcluster stop garnet                        - stop all GarnetServer instances
 #   mcluster stop                               - stop all (valkey + garnet)
+#   mcluster clean valkey                       - remove valkey-cluster directory
+#   mcluster clean garnet                       - remove garnet-cluster directory
+#   mcluster clean                              - remove both cluster directories
 #   mcluster update garnet cache                - pull latest configs, regenerate existing configs
 #   mcluster update valkey cache 16             - pull latest configs, regenerate 16 configs
 
@@ -139,6 +144,28 @@ start_garnet() {
   done
 }
 
+clean_system() {
+  local system="$1"
+  if [ "$system" = "garnet" ] || [ -z "$system" ]; then
+    local garnet_dir="$HOME/garnet-cluster"
+    if [ -d "$garnet_dir" ]; then
+      rm -rf "$garnet_dir"
+      echo "  Removed $garnet_dir"
+    else
+      echo "  $garnet_dir does not exist (skipped)"
+    fi
+  fi
+  if [ "$system" = "valkey" ] || [ -z "$system" ]; then
+    local valkey_dir="$HOME/valkey-cluster"
+    if [ -d "$valkey_dir" ]; then
+      rm -rf "$valkey_dir"
+      echo "  Removed $valkey_dir"
+    else
+      echo "  $valkey_dir does not exist (skipped)"
+    fi
+  fi
+}
+
 stop_system() {
   local system="$1" nodes="$2"
   if [ "$system" = "garnet" ]; then
@@ -174,14 +201,18 @@ stop_system() {
 
 case "$ACTION" in
   start)
-    SYSTEM="${2:?Usage: mcluster start <system> <template> <nodes> [--cluster|--no-cluster]}"
-    TEMPLATE="${3:?Usage: mcluster start <system> <template> <nodes> [--cluster|--no-cluster]}"
-    NODES="${4:?Usage: mcluster start <system> <template> <nodes> [--cluster|--no-cluster]}"
-    if [ "${5:-}" = "--no-cluster" ]; then
-      CLUSTER_MODE="false"
-    elif [ "${5:-}" = "--cluster" ]; then
-      CLUSTER_MODE="true"
-    fi
+    SYSTEM="${2:?Usage: mcluster start <system> <template> <nodes> [--cluster|--no-cluster] [--clean]}"
+    TEMPLATE="${3:?Usage: mcluster start <system> <template> <nodes> [--cluster|--no-cluster] [--clean]}"
+    NODES="${4:?Usage: mcluster start <system> <template> <nodes> [--cluster|--no-cluster] [--clean]}"
+    # Parse optional flags
+    shift 4
+    for arg in "$@"; do
+      case "$arg" in
+        --no-cluster) CLUSTER_MODE="false" ;;
+        --cluster)    CLUSTER_MODE="true" ;;
+        --clean)      echo "Cleaning $SYSTEM cluster directory..."; clean_system "$SYSTEM" ;;
+      esac
+    done
 
     pull_configs
     resolve_template "$SYSTEM" "$TEMPLATE" "$NODES"
@@ -199,8 +230,26 @@ case "$ACTION" in
     NODES="${3:-}"
     if [ -z "$SYSTEM" ]; then
       echo "Stopping all instances..."
-      pkill -f "valkey-server" 2>/dev/null && echo "  valkey-server stopped." || true
-      pkill -f "GarnetServer" 2>/dev/null && echo "  GarnetServer stopped." || true
+      local valkey_pids=$(pgrep -f "valkey-server" 2>/dev/null)
+      if [ -n "$valkey_pids" ]; then
+        echo "$valkey_pids" | while read -r pid; do
+          local port=$(ps -p $pid -o args= 2>/dev/null | grep -oP ':\K[0-9]+' | head -1)
+          kill $pid
+          echo "  valkey-server port ${port:-?}: stopped (pid $pid)"
+        done
+      else
+        echo "  No valkey-server running."
+      fi
+      local garnet_pids=$(pgrep -f "GarnetServer" 2>/dev/null)
+      if [ -n "$garnet_pids" ]; then
+        echo "$garnet_pids" | while read -r pid; do
+          local port=$(ps -p $pid -o args= 2>/dev/null | grep -oP '\-\-port \K[0-9]+' | head -1)
+          kill $pid
+          echo "  GarnetServer port ${port:-?}: stopped (pid $pid)"
+        done
+      else
+        echo "  No GarnetServer running."
+      fi
       echo "Done."
     else
       stop_system "$SYSTEM" "$NODES"
@@ -237,10 +286,18 @@ case "$ACTION" in
     echo "Updated configs in place. Restart instances to apply."
     ;;
 
+  clean)
+    SYSTEM="${2:-}"
+    echo "Cleaning cluster directories..."
+    clean_system "$SYSTEM"
+    echo "Done."
+    ;;
+
   *)
     echo "Unknown action: $ACTION"
-    echo "Usage: mcluster start <system> <template> <nodes> [--cluster|--no-cluster]"
+    echo "Usage: mcluster start <system> <template> <nodes> [--cluster|--no-cluster] [--clean]"
     echo "       mcluster stop [system] [nodes]"
+    echo "       mcluster clean [system]"
     echo "       mcluster update <system> <template> [nodes] [--cluster|--no-cluster]"
     exit 1
     ;;
