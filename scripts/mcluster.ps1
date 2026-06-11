@@ -164,18 +164,20 @@ function Stop-System {
         if ($Count -gt 0) {
             for ($i = 0; $i -lt $Count; $i++) {
                 $port = $BASE_PORT + $i
-                $procId = (bash -c "pgrep -f 'GarnetServer.*--port ${port}'" 2>$null).Trim()
+                $raw = bash -c "pgrep -f 'GarnetServer.*--port ${port}'" 2>$null
+                $procId = if ($raw) { $raw.Trim() } else { "" }
                 if ($procId) { bash -c "kill $procId"; Write-Host "  Garnet port ${port}: stopped (pid $procId)" }
                 else { Write-Host "  Garnet port ${port}: not running" -ForegroundColor DarkGray }
             }
         } else {
-            $pids = (bash -c "pgrep -f GarnetServer" 2>$null).Trim() -split "`n" | Where-Object { $_ }
-            if ($pids) {
-                foreach ($pid in $pids) {
-                    $portMatch = bash -c "ps -p $pid -o args= 2>/dev/null" | Select-String -Pattern '--port (\d+)'
+            $raw = bash -c "pgrep -f GarnetServer" 2>$null
+            $procIds = if ($raw) { $raw.Trim() -split "`n" | Where-Object { $_ } } else { @() }
+            if ($procIds) {
+                foreach ($p in $procIds) {
+                    $portMatch = bash -c "ps -p $p -o args= 2>/dev/null" | Select-String -Pattern '--port (\d+)'
                     $port = if ($portMatch) { $portMatch.Matches[0].Groups[1].Value } else { "?" }
-                    bash -c "kill $pid"
-                    Write-Host "  GarnetServer port ${port}: stopped (pid $pid)"
+                    bash -c "kill $p"
+                    Write-Host "  GarnetServer port ${port}: stopped (pid $p)"
                 }
             } else {
                 Write-Host "  No GarnetServer running." -ForegroundColor DarkGray
@@ -185,18 +187,20 @@ function Stop-System {
         if ($Count -gt 0) {
             for ($i = 0; $i -lt $Count; $i++) {
                 $port = $BASE_PORT + $i
-                $procId = (bash -c "pgrep -f 'valkey-server.*:${port}'" 2>$null).Trim()
+                $raw = bash -c "pgrep -f 'valkey-server.*:${port}'" 2>$null
+                $procId = if ($raw) { $raw.Trim() } else { "" }
                 if ($procId) { bash -c "kill $procId"; Write-Host "  Valkey port ${port}: stopped (pid $procId)" }
                 else { Write-Host "  Valkey port ${port}: not running" -ForegroundColor DarkGray }
             }
         } else {
-            $pids = (bash -c "pgrep -f valkey-server" 2>$null).Trim() -split "`n" | Where-Object { $_ }
-            if ($pids) {
-                foreach ($pid in $pids) {
-                    $portMatch = bash -c "ps -p $pid -o args= 2>/dev/null" | Select-String -Pattern ':(\d+)'
+            $raw = bash -c "pgrep -f valkey-server" 2>$null
+            $procIds = if ($raw) { $raw.Trim() -split "`n" | Where-Object { $_ } } else { @() }
+            if ($procIds) {
+                foreach ($p in $procIds) {
+                    $portMatch = bash -c "ps -p $p -o args= 2>/dev/null" | Select-String -Pattern ':(\d+)'
                     $port = if ($portMatch) { $portMatch.Matches[0].Groups[1].Value } else { "?" }
-                    bash -c "kill $pid"
-                    Write-Host "  valkey-server port ${port}: stopped (pid $pid)"
+                    bash -c "kill $p"
+                    Write-Host "  valkey-server port ${port}: stopped (pid $p)"
                 }
             } else {
                 Write-Host "  No valkey-server running." -ForegroundColor DarkGray
