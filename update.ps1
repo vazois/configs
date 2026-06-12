@@ -11,20 +11,22 @@
 #>
 param(
     [switch]$Pull,
+    [switch]$Copy,
     [switch]$Run,
     [switch]$RunOnly,
     [switch]$Help
 )
 
-if ($Help -or (-not $Pull -and -not $Run -and -not $RunOnly)) {
-    Write-Host "Usage: update.ps1 [-Pull] [-Run] [-RunOnly]"
+if ($Help -or (-not $Pull -and -not $Copy -and -not $Run -and -not $RunOnly)) {
+    Write-Host "Usage: update.ps1 [-Pull] [-Copy] [-Run] [-RunOnly]"
     Write-Host ""
     Write-Host "Pull latest configs repo, copy scripts, and optionally run deploy commands."
     Write-Host "Reads manifest.json for source->destination mapping and runcmd definitions."
     Write-Host ""
     Write-Host "Options:"
     Write-Host "  -Pull      Pull latest changes from git before copying"
-    Write-Host "  -Run       Execute the runcmd section from manifest after copying"
+    Write-Host "  -Copy      Copy scripts to deployed locations"
+    Write-Host "  -Run       Copy scripts and execute the runcmd section from manifest"
     Write-Host "  -RunOnly   Execute runcmd without copying scripts"
     Write-Host "  -Help      Show this help message"
     return
