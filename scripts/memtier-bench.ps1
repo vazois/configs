@@ -10,8 +10,8 @@
     memtier-bench.ps1 -Address 10.5.0.4 -Port 7000 -Cluster -Pipeline 512 -DbSize 1000000 -DataSize 128 -TestTime 30
 #>
 param(
-    [Parameter(Mandatory)][string]$Address,
-    [Parameter(Mandatory)][int]$Port,
+    [string]$Address,
+    [int]$Port,
     [int]$Threads = 128,
     [int]$Clients = 64,
     [int]$Pipeline = 1024,
@@ -19,8 +19,33 @@ param(
     [int]$DataSize = 8,
     [int]$TestTime = 15,
     [switch]$Cluster,
-    [switch]$SkipLoad
+    [switch]$SkipLoad,
+    [switch]$Help
 )
+
+if ($Help -or (-not $Address -and -not $Port)) {
+    Write-Host "Usage: memtier-bench.ps1 -Address <ip> -Port <n> [-Threads <n>] [-Clients <n>] [-Pipeline <n>] [-DbSize <n>] [-DataSize <n>] [-TestTime <n>] [-Cluster] [-SkipLoad]"
+    Write-Host ""
+    Write-Host "Runs memtier_benchmark with load and benchmark phases."
+    Write-Host ""
+    Write-Host "Options:"
+    Write-Host "  -Address    Target server address (required)"
+    Write-Host "  -Port       Target server port (required)"
+    Write-Host "  -Threads    Number of threads (default: 128)"
+    Write-Host "  -Clients    Number of clients per thread (default: 64)"
+    Write-Host "  -Pipeline   Pipeline depth (default: 1024)"
+    Write-Host "  -DbSize     Number of keys to load (default: 268435456)"
+    Write-Host "  -DataSize   Value size in bytes (default: 8)"
+    Write-Host "  -TestTime   Benchmark duration in seconds (default: 15)"
+    Write-Host "  -Cluster    Enable cluster mode"
+    Write-Host "  -SkipLoad   Skip the key loading phase"
+    Write-Host "  -Help       Show this help message"
+    return
+}
+
+if (-not $Address -or -not $Port) {
+    throw "ERROR: -Address and -Port are required. Use -Help for usage."
+}
 
 $ErrorActionPreference = "Stop"
 $clusterFlag = if ($Cluster) { "--cluster-mode" } else { "" }

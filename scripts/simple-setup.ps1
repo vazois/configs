@@ -7,8 +7,27 @@ param (
 	[int]$replicas=0,
 	[switch]$redis,
 	[switch]$tls,
-	[string]$password="empty"
+	[string]$password="empty",
+	[switch]$Help
 )
+
+if ($Help -or (-not $addr -and -not $redis)) {
+    Write-Host "Usage: simple-setup.ps1 [-addr <ip>] [-port <n>] [-count <n>] [-shards <n>] [-replicas <n>] [-redis] [-tls] [-password <pass>]"
+    Write-Host ""
+    Write-Host "Set up a redis/valkey/garnet cluster by assigning slots and issuing CLUSTER MEET."
+    Write-Host ""
+    Write-Host "Options:"
+    Write-Host "  -addr       Target address (auto-detected from listening port if omitted)"
+    Write-Host "  -port       Base port (default: 7000)"
+    Write-Host "  -count      Number of nodes (default: 3)"
+    Write-Host "  -shards     Number of shards for slot assignment (default: 3)"
+    Write-Host "  -replicas   Number of replicas (default: 0)"
+    Write-Host "  -redis      Use redis-cli --cluster create instead of manual setup"
+    Write-Host "  -tls        Enable TLS connections"
+    Write-Host "  -password   Password for AUTH (default: none)"
+    Write-Host "  -Help       Show this help message"
+    return
+}
 
 if ($addr) {	
 	Write-Host "Using input address!"

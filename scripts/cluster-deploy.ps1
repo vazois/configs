@@ -15,10 +15,10 @@
 #>
 param(
     [string]$Endpoint,
-    [Parameter(Mandatory)][int]$NodeCount,
-    [Parameter(Mandatory)][ValidateSet("valkey","garnet")][string]$System,
-    [Parameter(Mandatory)][string]$Template,
-    [Parameter(Mandatory)][int]$InstanceCount,
+    [int]$NodeCount,
+    [ValidateSet("valkey","garnet")][string]$System,
+    [string]$Template,
+    [int]$InstanceCount,
     [switch]$Clean,
     [switch]$Setup,
     [int]$Replicas = 0,
@@ -26,8 +26,32 @@ param(
     [string]$User = "guser",
     [int]$Port = 7000,
     [int]$SshTimeout = 10,
-    [int]$TcpTimeout = 60
+    [int]$TcpTimeout = 60,
+    [switch]$Help
 )
+
+if ($Help -or (-not $NodeCount -and -not $System)) {
+    Write-Host "Usage: cluster-deploy.ps1 -Endpoint <ip> -NodeCount <n> -System <valkey|garnet> -Template <name> -InstanceCount <n> [-Clean] [-Setup] [-Replicas <n>] [-NoCluster]"
+    Write-Host ""
+    Write-Host "Orchestrates mcluster start across multiple VMSS instances and optionally forms a cluster."
+    Write-Host ""
+    Write-Host "Options:"
+    Write-Host "  -Endpoint       Base IP of first VM (auto-detected from eth1 if omitted)"
+    Write-Host "  -NodeCount      Number of VMs to deploy across (required)"
+    Write-Host "  -System         Target system: valkey or garnet (required)"
+    Write-Host "  -Template       Config template name (required)"
+    Write-Host "  -InstanceCount  Number of instances per VM (required)"
+    Write-Host "  -Clean          Clean cluster directories before starting"
+    Write-Host "  -Setup          Form the cluster after all instances are running"
+    Write-Host "  -Replicas       Number of replicas per primary (default: 0)"
+    Write-Host "  -NoCluster      Start instances without cluster mode"
+    Write-Host "  -User           SSH user (default: guser)"
+    Write-Host "  -Port           Base port (default: 7000)"
+    Write-Host "  -SshTimeout     SSH connection timeout in seconds (default: 10)"
+    Write-Host "  -TcpTimeout     TCP endpoint wait timeout in seconds (default: 60)"
+    Write-Host "  -Help           Show this help message"
+    return
+}
 
 $ErrorActionPreference = "Stop"
 

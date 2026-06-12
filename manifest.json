@@ -12,7 +12,8 @@
     { "src": "scripts/mcluster.sh",         "dst": "/usr/local/bin/mcluster",                 "mode": "755" },
     { "src": "scripts/simple-setup.ps1",    "dst": "/usr/local/bin/simple-setup.ps1",         "mode": "755" },
     { "src": "scripts/memtier-bench.ps1",   "dst": "/usr/local/bin/memtier-bench.ps1",        "mode": "755" },
-    { "src": "scripts/mcluster.ps1",        "dst": "/usr/local/bin/mcluster.ps1",             "mode": "755" }
+    { "src": "scripts/mcluster.ps1",        "dst": "/usr/local/bin/mcluster.ps1",             "mode": "755" },
+    { "src": "scripts/cluster-deploy.ps1", "dst": "/usr/local/bin/cluster-deploy.ps1",       "mode": "755" }
   ],
   "runcmd": [
     { "run": "install-dotnet.sh",    "sudo": true,  "args": "" },

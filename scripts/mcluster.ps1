@@ -15,13 +15,35 @@
     mcluster.ps1 -Action update -System valkey -Template cache -Nodes 16 -NoCluster
 #>
 param(
-    [Parameter(Mandatory)][ValidateSet("start","stop","update","clean")][string]$Action,
+    [ValidateSet("start","stop","update","clean")][string]$Action,
     [string]$System,
     [string]$Template,
     [int]$Nodes = 0,
     [switch]$NoCluster,
-    [switch]$Clean
+    [switch]$Clean,
+    [switch]$Help
 )
+
+if ($Help -or -not $Action) {
+    Write-Host "Usage: mcluster.ps1 -Action <start|stop|update|clean> [-System <valkey|garnet>] [-Template <name>] [-Nodes <n>] [-NoCluster] [-Clean]"
+    Write-Host ""
+    Write-Host "Manage valkey/garnet cluster instances: start, stop, clean, or update configs."
+    Write-Host ""
+    Write-Host "Actions:"
+    Write-Host "  start    Start cluster instances (requires -System, -Template, -Nodes)"
+    Write-Host "  stop     Stop running instances (optionally filter by -System, -Nodes)"
+    Write-Host "  clean    Remove cluster directories (optionally filter by -System)"
+    Write-Host "  update   Pull configs and re-resolve templates (requires -System, -Template)"
+    Write-Host ""
+    Write-Host "Options:"
+    Write-Host "  -System      Target system: valkey or garnet"
+    Write-Host "  -Template    Config template name (e.g., cache, disk)"
+    Write-Host "  -Nodes       Number of instances to manage"
+    Write-Host "  -NoCluster   Disable cluster mode in generated configs"
+    Write-Host "  -Clean       Remove cluster directory before starting"
+    Write-Host "  -Help        Show this help message"
+    return
+}
 
 $ErrorActionPreference = "Stop"
 
