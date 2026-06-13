@@ -251,7 +251,7 @@ function Invoke-ParallelMcluster {
             $output = Invoke-Expression "mcluster.ps1 $MclusterArgs" 2>&1
         } else {
             Write-Host "  [$ip] (ssh) ..." -NoNewline
-            $output = ssh -o ConnectTimeout=10 -o StrictHostKeyChecking=no -o BatchMode=yes "$SshUser@$ip" "pwsh -NoProfile -Command 'mcluster.ps1 $MclusterArgs'" 2>&1
+            $output = ssh -o ConnectTimeout=10 -o StrictHostKeyChecking=no -o BatchMode=yes "$SshUser@$ip" "bash -c 'mcluster.ps1 $MclusterArgs < /dev/null 2>&1; exit 0'" 2>&1
         }
         if ($LASTEXITCODE -eq 0) {
             Write-Host " success" -ForegroundColor Green

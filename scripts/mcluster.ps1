@@ -153,7 +153,7 @@ function Start-Garnet {
         if ($running) { Write-Host "  Port ${port}: already running (skipped)" -ForegroundColor DarkGray; continue }
 
         Set-Location $dir
-        bash -c "nohup GarnetServer --config-import-path='$conf' > '$dir/garnet.log' 2>&1 &"
+        bash -c "setsid GarnetServer --config-import-path='$conf' > '$dir/garnet.log' 2>&1 < /dev/null &"
         Write-Host "  Port ${port}: started" -ForegroundColor Cyan
     }
 }
