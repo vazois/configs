@@ -153,7 +153,9 @@ function Start-Garnet {
         if ($running) { Write-Host "  Port ${port}: already running (skipped)" -ForegroundColor DarkGray; continue }
 
         Set-Location $dir
-        bash -c "setsid GarnetServer --config-import-path='$conf' > '$dir/garnet.log' 2>&1 < /dev/null &"
+        Start-Process -FilePath "GarnetServer" -ArgumentList "--config-import-path=$conf" `
+            -RedirectStandardOutput "$dir/garnet.log" -RedirectStandardError "$dir/garnet.err" `
+            -NoNewWindow
         Write-Host "  Port ${port}: started" -ForegroundColor Cyan
     }
 }
