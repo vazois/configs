@@ -241,43 +241,24 @@ function Test-VmssFamily {
 function Invoke-ParallelMcluster {
     param([string[]]$Ips, [string]$SshUser, [string]$MclusterArgs, [string]$OwnIp)
     Write-Host ""
-    Write-Host "Running mcluster.ps1 on $($Ips.Count) VMs in parallel..." -ForegroundColor Yellow
+    Write-Host "Running mcluster.ps1 on $($Ips.Count) VMs..." -ForegroundColor Yellow
     Write-Host "  Command: mcluster.ps1 $MclusterArgs" -ForegroundColor DarkGray
 
-    $jobs = @()
+    $failures = @()
     foreach ($ip in $Ips) {
         if ($ip -eq $OwnIp) {
-            # Run locally
-            $job = Start-Job -ScriptBlock {
-                param($args_str)
-                $output = pwsh -NoProfile -Command "mcluster.ps1 $args_str" 2>&1
-                return @{ Ip = $Using:ip; Output = ($output -join "`n"); ExitCode = $LASTEXITCODE }
-            } -ArgumentList $MclusterArgs
+            Write-Host "  [$ip] (local) ..." -NoNewline
+            $output = Invoke-Expression "mcluster.ps1 $MclusterArgs" 2>&1
         } else {
-            $job = Start-Job -ScriptBlock {
-                param($ip, $user, $args_str)
-                $output = ssh -o StrictHostKeyChecking=no -o BatchMode=yes "$user@$ip" "pwsh -NoProfile -Command 'mcluster.ps1 $args_str'" 2>&1
-                return @{ Ip = $ip; Output = ($output -join "`n"); ExitCode = $LASTEXITCODE }
-            } -ArgumentList $ip, $SshUser, $MclusterArgs
+            Write-Host "  [$ip] (ssh) ..." -NoNewline
+            $output = ssh -o ConnectTimeout=10 -o StrictHostKeyChecking=no -o BatchMode=yes "$SshUser@$ip" "pwsh -NoProfile -Command 'mcluster.ps1 $MclusterArgs'" 2>&1
         }
-        $jobs += @{ Ip = $ip; Job = $job }
-    }
-
-    $results = @()
-    foreach ($entry in $jobs) {
-        $result = Receive-Job -Job $entry.Job -Wait
-        Remove-Job -Job $entry.Job
-        $results += $result
-    }
-
-    $failures = @()
-    foreach ($r in $results) {
-        if ($r.ExitCode -eq 0) {
-            Write-Host "  $($r.Ip): success" -ForegroundColor Green
+        if ($LASTEXITCODE -eq 0) {
+            Write-Host " success" -ForegroundColor Green
         } else {
-            Write-Host "  $($r.Ip): FAILED (exit code $($r.ExitCode))" -ForegroundColor Red
-            Write-Host $r.Output -ForegroundColor DarkGray
-            $failures += $r.Ip
+            Write-Host " FAILED (exit code $LASTEXITCODE)" -ForegroundColor Red
+            $output | ForEach-Object { Write-Host "    $_" -ForegroundColor DarkGray }
+            $failures += $ip
         }
     }
 
