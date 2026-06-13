@@ -101,15 +101,14 @@ function Find-Peers {
     Write-Host "Discovering peers on eth1 subnet ($OwnIp/$Prefix)..." -ForegroundColor Yellow
 
     $candidateIps = Get-SubnetIps -Ip $OwnIp -Prefix $Prefix
-    Write-Host "  Scanning $($candidateIps.Count) candidate IPs..." -ForegroundColor DarkGray
+    Write-Host "  Scanning $($candidateIps.Count) candidate IPs (100ms timeout)..." -ForegroundColor DarkGray
 
     $peers = @()
     foreach ($ip in $candidateIps) {
-        # Quick TCP probe on port 22
         try {
             $tcp = [System.Net.Sockets.TcpClient]::new()
             $task = $tcp.ConnectAsync($ip, 22)
-            if ($task.Wait([TimeSpan]::FromSeconds($Timeout))) {
+            if ($task.Wait([TimeSpan]::FromMilliseconds(100))) {
                 $tcp.Close()
                 $peers += $ip
                 Write-Host "  $ip : alive" -ForegroundColor DarkGray
