@@ -315,11 +315,11 @@ function Invoke-ParallelMcluster {
     foreach ($ip in $Ips) {
         if ($ip -eq $OwnIp) {
             Write-Host "  [$ip] (local) ..." -NoNewline
-            $output = Invoke-Expression "mcluster.ps1 $MclusterArgs" 2>&1
+            Invoke-Expression "mcluster.ps1 $MclusterArgs" 2>&1 | Out-Null
             Write-Host " dispatched" -ForegroundColor Green
         } else {
             Write-Host "  [$ip] (ssh) ..." -NoNewline
-            InvokeSsh -Ip $ip -SshUser $SshUser -Command "mcluster.ps1 $MclusterArgs" -Background
+            InvokeSsh -Ip $ip -SshUser $SshUser -Command "mcluster.ps1 $MclusterArgs" -Background | Out-Null
             Write-Host " dispatched" -ForegroundColor Green
         }
     }
