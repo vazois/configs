@@ -430,17 +430,24 @@ Write-Host "==== cluster-deploy ($Action) ====" -ForegroundColor Cyan
 
 switch ($Action) {
     "discover" {
-        if (-not $InstanceCount) { throw "ERROR: -InstanceCount is required for discover." }
-
         $peerInfo = Resolve-Peers -Endpoint $Endpoint -NodeCount $NodeCount -User $User -SshTimeout $SshTimeout -ForceDiscover
         $ips = $peerInfo.Ips
 
-        Write-Host ""
-        Write-Host "Probing ports on discovered peers..." -ForegroundColor Yellow
-        $probeResults = Test-Ports -Ips $ips -BasePort $Port -Count $InstanceCount
+        if ($InstanceCount -gt 0) {
+            Write-Host ""
+            Write-Host "Probing ports on discovered peers..." -ForegroundColor Yellow
+            $probeResults = Test-Ports -Ips $ips -BasePort $Port -Count $InstanceCount
 
-        Write-Host ""
-        Show-Discovery -ProbeResults $probeResults -BasePort $Port -Count $InstanceCount
+            Write-Host ""
+            Show-Discovery -ProbeResults $probeResults -BasePort $Port -Count $InstanceCount
+        } else {
+            Write-Host ""
+            Write-Host "Discovered peers:" -ForegroundColor Yellow
+            $ips | ForEach-Object { Write-Host "  $_" }
+            Write-Host ""
+            Write-Host "  Total: $($ips.Count) peer(s)" -ForegroundColor Green
+            Write-Host "  (use -InstanceCount to probe ports)" -ForegroundColor DarkGray
+        }
     }
 
     "start" {
@@ -532,7 +539,6 @@ switch ($Action) {
 
     "stop" {
         if (-not $System) { throw "ERROR: -System is required for stop." }
-        if (-not $InstanceCount) { throw "ERROR: -InstanceCount is required for stop." }
 
         $peerInfo = Resolve-Peers -Endpoint $Endpoint -NodeCount $NodeCount -User $User -SshTimeout $SshTimeout
         $ips = $peerInfo.Ips
@@ -543,7 +549,7 @@ switch ($Action) {
         Write-Host "  System: $System"
         Write-Host ""
 
-        $mclusterArgs = "-Action stop -System $System -Nodes $InstanceCount"
+        $mclusterArgs = "-Action stop -System $System"
         $failures = Invoke-ParallelMcluster -Ips $ips -SshUser $User -MclusterArgs $mclusterArgs -OwnIp $ownIp
     }
 }
