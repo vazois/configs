@@ -324,6 +324,9 @@ function Invoke-ParallelMcluster {
         }
     }
 
+    Write-Host ""
+    Write-Host "  Summary: dispatched 'mcluster.ps1 $MclusterArgs' to $($Ips.Count) VM(s)" -ForegroundColor Cyan
+
     # Skip port probing if InstanceCount is 0 (e.g., stop action)
     if ($InstanceCount -le 0) { return @() }
 
