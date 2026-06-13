@@ -65,6 +65,16 @@ $ErrorActionPreference = "Stop"
 
 # --- Helper Functions ---
 
+function InvokeSsh {
+    param([string]$Ip, [string]$SshUser, [string]$Command, [int]$Timeout = 10, [switch]$Background)
+    $sshArgs = @("-o", "ConnectTimeout=$Timeout", "-o", "StrictHostKeyChecking=no", "-o", "BatchMode=yes")
+    if ($Background) {
+        return ssh @sshArgs "$SshUser@$Ip" "nohup $Command > /tmp/mcluster-deploy.log 2>&1 &" 2>&1
+    } else {
+        return ssh @sshArgs "$SshUser@$Ip" $Command 2>&1
+    }
+}
+
 function Get-OwnEth1Info {
     $output = ip -4 addr show eth1 2>$null
     $inetLine = $output | Where-Object { $_ -match 'inet\s+([\d.]+)/([\d]+)' } | Select-Object -First 1
@@ -197,7 +207,7 @@ function Test-SshConnectivity {
     Write-Host "Validating SSH connectivity to $($Ips.Count) VMs..." -ForegroundColor Yellow
     $failed = @()
     foreach ($ip in $Ips) {
-        $result = ssh -o ConnectTimeout=$Timeout -o StrictHostKeyChecking=no -o BatchMode=yes "$SshUser@$ip" "echo ok" 2>$null
+        $result = InvokeSsh -Ip $ip -SshUser $SshUser -Command "echo ok" -Timeout $Timeout
         if ($result -ne "ok") {
             $failed += $ip
         } else {
@@ -217,7 +227,7 @@ function Test-VmssFamily {
     Write-Host "Validating VMSS family membership..." -ForegroundColor Yellow
     $hostnames = @()
     foreach ($ip in $Ips) {
-        $hostname = ssh -o ConnectTimeout=$Timeout -o StrictHostKeyChecking=no -o BatchMode=yes "$SshUser@$ip" "hostname" 2>$null
+        $hostname = InvokeSsh -Ip $ip -SshUser $SshUser -Command "hostname" -Timeout $Timeout
         if (-not $hostname) {
             throw "ERROR: Could not get hostname from $ip"
         }
@@ -238,36 +248,91 @@ function Test-VmssFamily {
     return $prefixes[0]
 }
 
+function Confirm-Endpoints {
+    param([string[]]$Ips, [int]$BasePort, [int]$InstanceCount, [string]$SshUser, [string]$RemoteLog, [int]$Timeout = 5)
+    Write-Host "  Probing ports (timeout: ${Timeout}s)..." -ForegroundColor Yellow
+
+    $deadline = (Get-Date).AddSeconds($Timeout)
+    $failures = @($Ips)
+
+    while ($failures.Count -gt 0 -and (Get-Date) -lt $deadline) {
+        $stillFailing = @()
+        foreach ($ip in $failures) {
+            $allUp = $true
+            for ($i = 0; $i -lt $InstanceCount; $i++) {
+                $p = $BasePort + $i
+                try {
+                    $tcp = [System.Net.Sockets.TcpClient]::new()
+                    $task = $tcp.ConnectAsync($ip, $p)
+                    if (-not $task.Wait([TimeSpan]::FromMilliseconds(200))) {
+                        $allUp = $false
+                    }
+                    $tcp.Close()
+                } catch {
+                    $allUp = $false
+                }
+                if (-not $allUp) { break }
+            }
+            if (-not $allUp) { $stillFailing += $ip }
+        }
+        $failures = $stillFailing
+        if ($failures.Count -gt 0) { Start-Sleep -Milliseconds 500 }
+    }
+
+    # Print final status
+    foreach ($ip in $Ips) {
+        $status = if ($ip -in $failures) { "FAILED" } else { "ok" }
+        $color = if ($ip -in $failures) { "Red" } else { "Green" }
+        Write-Host "  [$ip] $status" -ForegroundColor $color
+    }
+
+    # Fetch logs from failed nodes
+    if ($failures.Count -gt 0 -and $RemoteLog) {
+        Write-Host ""
+        Write-Host "Fetching logs from failed VMs..." -ForegroundColor Yellow
+        foreach ($ip in $failures) {
+            Write-Host "  --- [$ip] $RemoteLog ---" -ForegroundColor Red
+            $log = InvokeSsh -Ip $ip -SshUser $SshUser -Command "cat $RemoteLog 2>/dev/null" -Timeout 5
+            $log | ForEach-Object { Write-Host "    $_" -ForegroundColor DarkGray }
+        }
+        Write-Host ""
+        Write-Host "WARNING: $($failures.Count) VM(s) failed." -ForegroundColor Red
+    } elseif ($failures.Count -eq 0) {
+        Write-Host "  All $($Ips.Count) VMs running successfully." -ForegroundColor Green
+    }
+
+    return $failures
+}
+
 function Invoke-ParallelMcluster {
-    param([string[]]$Ips, [string]$SshUser, [string]$MclusterArgs, [string]$OwnIp)
+    param([string[]]$Ips, [string]$SshUser, [string]$MclusterArgs, [string]$OwnIp, [int]$BasePort, [int]$InstanceCount)
     Write-Host ""
     Write-Host "Running mcluster.ps1 on $($Ips.Count) VMs..." -ForegroundColor Yellow
     Write-Host "  Command: mcluster.ps1 $MclusterArgs" -ForegroundColor DarkGray
 
-    $failures = @()
+    $remoteLog = "/tmp/mcluster-deploy.log"
+
     foreach ($ip in $Ips) {
         if ($ip -eq $OwnIp) {
             Write-Host "  [$ip] (local) ..." -NoNewline
             $output = Invoke-Expression "mcluster.ps1 $MclusterArgs" 2>&1
+            Write-Host " dispatched" -ForegroundColor Green
         } else {
             Write-Host "  [$ip] (ssh) ..." -NoNewline
-            $output = ssh -o ConnectTimeout=10 -o StrictHostKeyChecking=no -o BatchMode=yes "$SshUser@$ip" "bash -c 'mcluster.ps1 $MclusterArgs < /dev/null 2>&1; exit 0'" 2>&1
-        }
-        if ($LASTEXITCODE -eq 0) {
-            Write-Host " success" -ForegroundColor Green
-        } else {
-            Write-Host " FAILED (exit code $LASTEXITCODE)" -ForegroundColor Red
-            $output | ForEach-Object { Write-Host "    $_" -ForegroundColor DarkGray }
-            $failures += $ip
+            InvokeSsh -Ip $ip -SshUser $SshUser -Command "mcluster.ps1 $MclusterArgs" -Background
+            Write-Host " dispatched" -ForegroundColor Green
         }
     }
 
-    if ($failures.Count -gt 0) {
-        Write-Host "WARNING: mcluster failed on $($failures.Count) VM(s): $($failures -join ', ')" -ForegroundColor Red
-    } else {
-        Write-Host "  All $($Ips.Count) VMs completed successfully." -ForegroundColor Green
-    }
+    # Skip port probing if InstanceCount is 0 (e.g., stop action)
+    if ($InstanceCount -le 0) { return @() }
 
+    # Wait a moment for processes to start
+    Write-Host ""
+    Write-Host "  Waiting for instances to come up..." -ForegroundColor DarkGray
+    Start-Sleep -Seconds 3
+
+    $failures = Confirm-Endpoints -Ips $Ips -BasePort $BasePort -InstanceCount $InstanceCount -SshUser $SshUser -RemoteLog $remoteLog
     return $failures
 }
 
@@ -455,21 +520,12 @@ switch ($Action) {
         if ($NoCluster) { $mclusterArgs += " -NoCluster" }
 
         # Run on all peers
-        $failures = Invoke-ParallelMcluster -Ips $ips -SshUser $User -MclusterArgs $mclusterArgs -OwnIp $ownIp
+        $failures = Invoke-ParallelMcluster -Ips $ips -SshUser $User -MclusterArgs $mclusterArgs -OwnIp $ownIp -BasePort $Port -InstanceCount $InstanceCount
 
         if ($failures.Count -gt 0) {
             Write-Host ""
             Write-Host "WARNING: Some VMs failed. Cluster may be incomplete." -ForegroundColor Red
         }
-
-        # Wait for all endpoints
-        $endpoints = @()
-        foreach ($ip in $ips) {
-            for ($p = 0; $p -lt $InstanceCount; $p++) {
-                $endpoints += "${ip}:$($Port + $p)"
-            }
-        }
-        Wait-ForEndpoints -Endpoints $endpoints -Timeout $TcpTimeout
     }
 
     "setup" {
@@ -530,7 +586,7 @@ switch ($Action) {
         Write-Host ""
 
         $mclusterArgs = "-Action stop -System $System"
-        $failures = Invoke-ParallelMcluster -Ips $ips -SshUser $User -MclusterArgs $mclusterArgs -OwnIp $ownIp
+        $failures = Invoke-ParallelMcluster -Ips $ips -SshUser $User -MclusterArgs $mclusterArgs -OwnIp $ownIp -BasePort $Port -InstanceCount 0
     }
 }
 
