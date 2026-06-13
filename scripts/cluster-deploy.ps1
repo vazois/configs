@@ -108,7 +108,7 @@ function Find-Peers {
         try {
             $tcp = [System.Net.Sockets.TcpClient]::new()
             $task = $tcp.ConnectAsync($ip, 22)
-            if ($task.Wait([TimeSpan]::FromMilliseconds(100))) {
+            if ($task.Wait([TimeSpan]::FromMilliseconds($SshTimeout))) {
                 $tcp.Close()
                 $peers += $ip
                 Write-Host "  $ip : alive" -ForegroundColor DarkGray
@@ -241,8 +241,8 @@ function Test-VmssFamily {
 function Invoke-ParallelMcluster {
     param([string[]]$Ips, [string]$SshUser, [string]$MclusterArgs, [string]$OwnIp)
     Write-Host ""
-    Write-Host "Running mcluster on $($Ips.Count) VMs in parallel..." -ForegroundColor Yellow
-    Write-Host "  Command: mcluster $MclusterArgs" -ForegroundColor DarkGray
+    Write-Host "Running mcluster.ps1 on $($Ips.Count) VMs in parallel..." -ForegroundColor Yellow
+    Write-Host "  Command: mcluster.ps1 $MclusterArgs" -ForegroundColor DarkGray
 
     $jobs = @()
     foreach ($ip in $Ips) {
@@ -250,13 +250,13 @@ function Invoke-ParallelMcluster {
             # Run locally
             $job = Start-Job -ScriptBlock {
                 param($args_str)
-                $output = bash -c "mcluster $args_str" 2>&1
+                $output = pwsh -NoProfile -Command "mcluster.ps1 $args_str" 2>&1
                 return @{ Ip = $Using:ip; Output = ($output -join "`n"); ExitCode = $LASTEXITCODE }
             } -ArgumentList $MclusterArgs
         } else {
             $job = Start-Job -ScriptBlock {
                 param($ip, $user, $args_str)
-                $output = ssh -o StrictHostKeyChecking=no -o BatchMode=yes "$user@$ip" "mcluster $args_str" 2>&1
+                $output = ssh -o StrictHostKeyChecking=no -o BatchMode=yes "$user@$ip" "pwsh -NoProfile -Command 'mcluster.ps1 $args_str'" 2>&1
                 return @{ Ip = $ip; Output = ($output -join "`n"); ExitCode = $LASTEXITCODE }
             } -ArgumentList $ip, $SshUser, $MclusterArgs
         }
@@ -409,6 +409,9 @@ function Resolve-Peers {
     $eth1 = Get-OwnEth1Info
     $peers = Find-Peers -OwnIp $eth1.Ip -Prefix $eth1.Prefix -SshUser $User -Timeout $SshTimeout
 
+    # Save to cache immediately after discovery
+    Save-PeerCache -Ips $peers -OwnIp $eth1.Ip
+
     # Validate VMSS family
     Test-VmssFamily -Ips $peers -SshUser $User -Timeout $SshTimeout
 
@@ -416,9 +419,6 @@ function Resolve-Peers {
     if ($NodeCount -gt 0 -and $peers.Count -ne $NodeCount) {
         Write-Host "WARNING: Expected $NodeCount peers but found $($peers.Count)" -ForegroundColor Yellow
     }
-
-    # Save to cache
-    Save-PeerCache -Ips $peers -OwnIp $eth1.Ip
 
     return @{ Ips = $peers; OwnIp = $eth1.Ip }
 }
@@ -468,7 +468,7 @@ switch ($Action) {
         Write-Host "  NoCluster:     $NoCluster"
         Write-Host ""
 
-        # Build mcluster arguments
+        # Build mcluster arguments (ps1 script)
         $mclusterArgs = "-Action start -System $System -Template $Template -Nodes $InstanceCount"
         if ($Clean) { $mclusterArgs += " -Clean" }
         if ($NoCluster) { $mclusterArgs += " -NoCluster" }
