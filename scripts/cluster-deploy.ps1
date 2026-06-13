@@ -1,26 +1,29 @@
 #!/usr/bin/env pwsh
 <#
 .SYNOPSIS
-    Orchestrates mcluster start across multiple VMSS instances and optionally forms a cluster.
+    Orchestrates cluster lifecycle across VMSS instances with automatic peer discovery.
 
 .DESCRIPTION
-    SSHs into N remote VMs (derived from Endpoint + count), validates connectivity,
-    runs mcluster start in parallel, and optionally forms a valkey/garnet cluster.
+    Discovers peer VMs on the accelerated subnet, then performs actions:
+    discover, start, setup, or stop.
 
 .EXAMPLE
-    cluster-deploy.ps1 -Endpoint 10.5.1.4 -NodeCount 8 -System valkey -Template cache -InstanceCount 4
-    cluster-deploy.ps1 -Endpoint 10.5.1.4 -NodeCount 8 -System valkey -Template cache -InstanceCount 4 -Clean -Setup -Replicas 1
-    cluster-deploy.ps1 -Endpoint 10.5.1.4 -NodeCount 2 -System garnet -Template cache -InstanceCount 1 -Setup
-    cluster-deploy.ps1 -Endpoint 10.5.1.4 -NodeCount 4 -System valkey -Template cache -InstanceCount 4 -NoCluster
+    cluster-deploy.ps1 -Action discover -InstanceCount 4
+    cluster-deploy.ps1 -Action start -System valkey -Template cache -InstanceCount 4
+    cluster-deploy.ps1 -Action start -System valkey -Template cache -InstanceCount 4 -Clean
+    cluster-deploy.ps1 -Action setup -System valkey -InstanceCount 4 -Replicas 1
+    cluster-deploy.ps1 -Action stop -System valkey -InstanceCount 4
+    cluster-deploy.ps1 -Action start -System garnet -Template cache -InstanceCount 1 -NoCluster
+    cluster-deploy.ps1 -Action start -Endpoint 10.5.1.4 -NodeCount 6 -System valkey -Template cache -InstanceCount 4
 #>
 param(
-    [string]$Endpoint,
-    [int]$NodeCount,
+    [ValidateSet("discover","start","setup","stop")][string]$Action,
     [ValidateSet("valkey","garnet")][string]$System,
     [string]$Template,
     [int]$InstanceCount,
+    [string]$Endpoint,
+    [int]$NodeCount,
     [switch]$Clean,
-    [switch]$Setup,
     [int]$Replicas = 0,
     [switch]$NoCluster,
     [string]$User = "guser",
@@ -30,21 +33,26 @@ param(
     [switch]$Help
 )
 
-if ($Help -or (-not $NodeCount -and -not $System)) {
-    Write-Host "Usage: cluster-deploy.ps1 -Endpoint <ip> -NodeCount <n> -System <valkey|garnet> -Template <name> -InstanceCount <n> [-Clean] [-Setup] [-Replicas <n>] [-NoCluster]"
+if ($Help -or -not $Action) {
+    Write-Host "Usage: cluster-deploy.ps1 -Action <discover|start|setup|stop> [options]"
     Write-Host ""
-    Write-Host "Orchestrates mcluster start across multiple VMSS instances and optionally forms a cluster."
+    Write-Host "Orchestrates cluster lifecycle across VMSS instances with automatic peer discovery."
+    Write-Host ""
+    Write-Host "Actions:"
+    Write-Host "  discover   Scan subnet for peers and probe ports for running instances"
+    Write-Host "  start      Discover peers, SSH mcluster start on each, wait for endpoints"
+    Write-Host "  setup      Discover peers, verify endpoints, form cluster (assign slots)"
+    Write-Host "  stop       Discover peers, SSH mcluster stop on each"
     Write-Host ""
     Write-Host "Options:"
-    Write-Host "  -Endpoint       Base IP of first VM (auto-detected from eth1 if omitted)"
-    Write-Host "  -NodeCount      Number of VMs to deploy across (required)"
-    Write-Host "  -System         Target system: valkey or garnet (required)"
-    Write-Host "  -Template       Config template name (required)"
+    Write-Host "  -System         Target system: valkey or garnet (required for start/setup/stop)"
+    Write-Host "  -Template       Config template name (required for start)"
     Write-Host "  -InstanceCount  Number of instances per VM (required)"
+    Write-Host "  -Endpoint       Base IP (skip discovery, use sequential IPs)"
+    Write-Host "  -NodeCount      Number of VMs (with -Endpoint, or as expected count validation)"
     Write-Host "  -Clean          Clean cluster directories before starting"
-    Write-Host "  -Setup          Form the cluster after all instances are running"
     Write-Host "  -Replicas       Number of replicas per primary (default: 0)"
-    Write-Host "  -NoCluster      Start instances without cluster mode"
+    Write-Host "  -NoCluster      Disable cluster mode in configs"
     Write-Host "  -User           SSH user (default: guser)"
     Write-Host "  -Port           Base port (default: 7000)"
     Write-Host "  -SshTimeout     SSH connection timeout in seconds (default: 10)"
@@ -55,19 +63,123 @@ if ($Help -or (-not $NodeCount -and -not $System)) {
 
 $ErrorActionPreference = "Stop"
 
-# Auto-detect Endpoint from eth1 if not provided
-if (-not $Endpoint) {
+# --- Helper Functions ---
+
+function Get-OwnEth1Info {
     $output = ip -4 addr show eth1 2>$null
-    $inetLine = $output | Where-Object { $_ -match 'inet\s+([\d.]+)' } | Select-Object -First 1
-    if ($inetLine -match 'inet\s+([\d.]+)') {
-        $Endpoint = $Matches[1]
-        Write-Host "Auto-detected Endpoint from eth1: $Endpoint" -ForegroundColor DarkGray
-    } else {
-        throw "ERROR: Could not detect eth1 IP. Provide -Endpoint manually."
+    $inetLine = $output | Where-Object { $_ -match 'inet\s+([\d.]+)/([\d]+)' } | Select-Object -First 1
+    if ($inetLine -match 'inet\s+([\d.]+)/([\d]+)') {
+        return @{ Ip = $Matches[1]; Prefix = [int]$Matches[2] }
     }
+    throw "ERROR: Could not detect eth1 IP/subnet."
 }
 
-# --- Helper Functions ---
+function Get-SubnetIps {
+    param([string]$Ip, [int]$Prefix)
+    $parts = $Ip -split '\.'
+    $ipInt = ([int]$parts[0] -shl 24) + ([int]$parts[1] -shl 16) + ([int]$parts[2] -shl 8) + [int]$parts[3]
+    $mask = -bnot ((1 -shl (32 - $Prefix)) - 1)
+    $network = $ipInt -band $mask
+    $hostCount = (1 -shl (32 - $Prefix)) - 2  # exclude network and broadcast
+
+    $ips = @()
+    # Skip first 4 (Azure reserved: network, gateway, DNS x2) and last (broadcast)
+    $start = $network + 4
+    $end = $network + (1 -shl (32 - $Prefix)) - 2
+    for ($i = $start; $i -le $end; $i++) {
+        $o1 = ($i -shr 24) -band 0xFF
+        $o2 = ($i -shr 16) -band 0xFF
+        $o3 = ($i -shr 8) -band 0xFF
+        $o4 = $i -band 0xFF
+        $ips += "$o1.$o2.$o3.$o4"
+    }
+    return $ips
+}
+
+function Find-Peers {
+    param([string]$OwnIp, [int]$Prefix, [string]$SshUser, [int]$Timeout)
+    Write-Host "Discovering peers on eth1 subnet ($OwnIp/$Prefix)..." -ForegroundColor Yellow
+
+    $candidateIps = Get-SubnetIps -Ip $OwnIp -Prefix $Prefix
+    Write-Host "  Scanning $($candidateIps.Count) candidate IPs..." -ForegroundColor DarkGray
+
+    $peers = @()
+    foreach ($ip in $candidateIps) {
+        # Quick TCP probe on port 22
+        try {
+            $tcp = [System.Net.Sockets.TcpClient]::new()
+            $task = $tcp.ConnectAsync($ip, 22)
+            if ($task.Wait([TimeSpan]::FromSeconds($Timeout))) {
+                $tcp.Close()
+                $peers += $ip
+                Write-Host "  $ip : alive" -ForegroundColor DarkGray
+            } else {
+                $tcp.Dispose()
+            }
+        } catch {
+            # not reachable
+        }
+    }
+
+    if ($peers.Count -eq 0) {
+        throw "ERROR: No peers found on subnet."
+    }
+
+    Write-Host "  Found $($peers.Count) peer(s)." -ForegroundColor Green
+    return $peers
+}
+
+function Test-Ports {
+    param([string[]]$Ips, [int]$BasePort, [int]$Count)
+    $results = @()
+    foreach ($ip in $Ips) {
+        $portStatus = @()
+        for ($i = 0; $i -lt $Count; $i++) {
+            $p = $BasePort + $i
+            $listening = $false
+            try {
+                $tcp = [System.Net.Sockets.TcpClient]::new()
+                $task = $tcp.ConnectAsync($ip, $p)
+                if ($task.Wait([TimeSpan]::FromSeconds(2))) {
+                    $listening = $true
+                }
+                $tcp.Close()
+            } catch { }
+            $portStatus += @{ Port = $p; Listening = $listening }
+        }
+        $results += @{ Ip = $ip; Ports = $portStatus }
+    }
+    return $results
+}
+
+function Show-Discovery {
+    param($ProbeResults, [int]$BasePort, [int]$Count)
+    # Header
+    $header = "  {0,-16}" -f "IP"
+    for ($i = 0; $i -lt $Count; $i++) {
+        $header += " {0,-10}" -f "Port $($BasePort + $i)"
+    }
+    Write-Host $header -ForegroundColor Cyan
+
+    $totalListening = 0
+    $totalPorts = 0
+    foreach ($r in $ProbeResults) {
+        $line = "  {0,-16}" -f $r.Ip
+        foreach ($ps in $r.Ports) {
+            $totalPorts++
+            if ($ps.Listening) {
+                $totalListening++
+                $line += " {0,-10}" -f "listening"
+            } else {
+                $line += " {0,-10}" -f "---"
+            }
+        }
+        $color = if ($r.Ports | Where-Object { $_.Listening }) { "Green" } else { "White" }
+        Write-Host $line -ForegroundColor $color
+    }
+    Write-Host ""
+    Write-Host "  Peers: $($ProbeResults.Count) | Listening: $totalListening/$totalPorts" -ForegroundColor Yellow
+}
 
 function Get-IpList {
     param([string]$Base, [int]$Count)
@@ -113,7 +225,6 @@ function Test-VmssFamily {
         $hostnames += @{ Ip = $ip; Hostname = $hostname }
     }
 
-    # Extract VMSS prefix (hostname minus the trailing instance digits, e.g., "eps8v6vmss" from "eps8v6vmss000001")
     $prefixes = $hostnames | ForEach-Object {
         if ($_.Hostname -match '^(.+?)\d{6}$') { $Matches[1] } else { $_.Hostname }
     } | Sort-Object -Unique
@@ -128,23 +239,31 @@ function Test-VmssFamily {
     return $prefixes[0]
 }
 
-function Start-ParallelMcluster {
-    param([string[]]$Ips, [string]$SshUser, [string]$MclusterArgs)
+function Invoke-ParallelMcluster {
+    param([string[]]$Ips, [string]$SshUser, [string]$MclusterArgs, [string]$OwnIp)
     Write-Host ""
-    Write-Host "Starting mcluster on $($Ips.Count) VMs in parallel..." -ForegroundColor Yellow
+    Write-Host "Running mcluster on $($Ips.Count) VMs in parallel..." -ForegroundColor Yellow
     Write-Host "  Command: mcluster $MclusterArgs" -ForegroundColor DarkGray
 
     $jobs = @()
     foreach ($ip in $Ips) {
-        $job = Start-Job -ScriptBlock {
-            param($ip, $user, $args_str)
-            $output = ssh -o StrictHostKeyChecking=no -o BatchMode=yes "$user@$ip" "mcluster $args_str" 2>&1
-            return @{ Ip = $ip; Output = ($output -join "`n"); ExitCode = $LASTEXITCODE }
-        } -ArgumentList $ip, $SshUser, $MclusterArgs
+        if ($ip -eq $OwnIp) {
+            # Run locally
+            $job = Start-Job -ScriptBlock {
+                param($args_str)
+                $output = bash -c "mcluster $args_str" 2>&1
+                return @{ Ip = $Using:ip; Output = ($output -join "`n"); ExitCode = $LASTEXITCODE }
+            } -ArgumentList $MclusterArgs
+        } else {
+            $job = Start-Job -ScriptBlock {
+                param($ip, $user, $args_str)
+                $output = ssh -o StrictHostKeyChecking=no -o BatchMode=yes "$user@$ip" "mcluster $args_str" 2>&1
+                return @{ Ip = $ip; Output = ($output -join "`n"); ExitCode = $LASTEXITCODE }
+            } -ArgumentList $ip, $SshUser, $MclusterArgs
+        }
         $jobs += @{ Ip = $ip; Job = $job }
     }
 
-    # Wait for all jobs
     $results = @()
     foreach ($entry in $jobs) {
         $result = Receive-Job -Job $entry.Job -Wait
@@ -152,7 +271,6 @@ function Start-ParallelMcluster {
         $results += $result
     }
 
-    # Report results
     $failures = @()
     foreach ($r in $results) {
         if ($r.ExitCode -eq 0) {
@@ -167,7 +285,7 @@ function Start-ParallelMcluster {
     if ($failures.Count -gt 0) {
         Write-Host "WARNING: mcluster failed on $($failures.Count) VM(s): $($failures -join ', ')" -ForegroundColor Red
     } else {
-        Write-Host "  All $($Ips.Count) VMs started successfully." -ForegroundColor Green
+        Write-Host "  All $($Ips.Count) VMs completed successfully." -ForegroundColor Green
     }
 
     return $failures
@@ -203,7 +321,7 @@ function Wait-ForEndpoints {
     if ($pending.Count -gt 0) {
         Write-Host "ERROR: Timed out waiting for endpoints:" -ForegroundColor Red
         $pending | ForEach-Object { Write-Host "  $_" -ForegroundColor Red }
-        throw "Aborting cluster setup: $($pending.Count) endpoint(s) not reachable"
+        throw "Aborting: $($pending.Count) endpoint(s) not reachable"
     }
 
     Write-Host "  All $($Endpoints.Count) endpoints responding." -ForegroundColor Green
@@ -219,7 +337,6 @@ function New-Cluster {
     if ($Sys -eq "valkey") {
         $cmd = "valkey-cli --cluster create $endpointStr --cluster-replicas $ReplicaCount --cluster-yes"
     } else {
-        # Garnet uses redis-cli compatible protocol
         $cmd = "redis-cli --cluster create $endpointStr --cluster-replicas $ReplicaCount --cluster-yes"
     }
 
@@ -235,7 +352,8 @@ function New-Cluster {
     $firstEp = $Endpoints[0] -split ':'
     Write-Host ""
     Write-Host "Verifying cluster state..." -ForegroundColor Yellow
-    $clusterInfo = bash -c "valkey-cli -h $($firstEp[0]) -p $($firstEp[1]) CLUSTER INFO" 2>&1
+    $verifyCmd = if ($Sys -eq "valkey") { "valkey-cli" } else { "redis-cli" }
+    $clusterInfo = bash -c "$verifyCmd -h $($firstEp[0]) -p $($firstEp[1]) CLUSTER INFO" 2>&1
     $stateLine = $clusterInfo | Where-Object { $_ -match "cluster_state" }
     $slotsLine = $clusterInfo | Where-Object { $_ -match "cluster_slots_ok" }
 
@@ -249,61 +367,185 @@ function New-Cluster {
     }
 }
 
-# --- Main ---
+# --- Peer Cache ---
 
-Write-Host "==== cluster-deploy ====" -ForegroundColor Cyan
-Write-Host "  Endpoint:      $Endpoint"
-Write-Host "  NodeCount:     $NodeCount"
-Write-Host "  System:      $System"
-Write-Host "  Template:    $Template"
-Write-Host "  InstanceCount:  $InstanceCount"
-Write-Host "  Port:    $Port"
-Write-Host "  Clean:       $Clean"
-Write-Host "  Setup:       $Setup"
-Write-Host "  Replicas:    $Replicas"
-Write-Host "  NoCluster:   $NoCluster"
-Write-Host ""
+$PeerCacheFile = "$HOME/.cluster-deploy-peers.json"
 
-# 1. Generate IP list
-$ips = Get-IpList -Base $Endpoint -Count $NodeCount
-
-# 2. Validate SSH connectivity
-Test-SshConnectivity -Ips $ips -SshUser $User -Timeout $SshTimeout
-
-# 3. Validate VMSS family
-$vmssPrefix = Test-VmssFamily -Ips $ips -SshUser $User -Timeout $SshTimeout
-
-# 4. Build mcluster arguments
-$mclusterArgs = "start $System $Template $InstanceCount"
-if ($Clean) { $mclusterArgs += " --clean" }
-if ($NoCluster) { $mclusterArgs += " --no-cluster" }
-
-# 5. Parallel mcluster start
-$failures = Start-ParallelMcluster -Ips $ips -SshUser $User -MclusterArgs $mclusterArgs
-
-if ($failures.Count -gt 0) {
-    Write-Host ""
-    Write-Host "WARNING: Some VMs failed. Cluster setup may be incomplete." -ForegroundColor Red
+function Save-PeerCache {
+    param([string[]]$Ips, [string]$OwnIp)
+    $cache = @{ Ips = $Ips; OwnIp = $OwnIp; Timestamp = (Get-Date -Format "o") }
+    $cache | ConvertTo-Json | Set-Content $PeerCacheFile
+    Write-Host "  Peer cache saved to $PeerCacheFile" -ForegroundColor DarkGray
 }
 
-# 6. Cluster formation (if --setup and not --no-cluster)
-if ($Setup -and -not $NoCluster) {
-    # Build endpoint list
-    $endpoints = @()
-    foreach ($ip in $ips) {
-        for ($p = 0; $p -lt $InstanceCount; $p++) {
-            $endpoints += "${ip}:$($Port + $p)"
+function Get-PeerCache {
+    if (-not (Test-Path $PeerCacheFile)) { return $null }
+    $cache = Get-Content $PeerCacheFile -Raw | ConvertFrom-Json
+    Write-Host "  Using cached peers from $($cache.Timestamp)" -ForegroundColor DarkGray
+    Write-Host "  (run '-Action discover' to refresh)" -ForegroundColor DarkGray
+    Write-Host "  Peers: $($cache.Ips -join ', ')" -ForegroundColor Cyan
+    return @{ Ips = @($cache.Ips); OwnIp = $cache.OwnIp }
+}
+
+# --- Resolve Peers ---
+
+function Resolve-Peers {
+    param([string]$Endpoint, [int]$NodeCount, [string]$User, [int]$SshTimeout, [switch]$ForceDiscover)
+
+    if ($Endpoint -and $NodeCount -gt 0) {
+        # Legacy mode: sequential IPs from base
+        Write-Host "Using provided Endpoint + NodeCount (sequential IPs)..." -ForegroundColor DarkGray
+        $ips = Get-IpList -Base $Endpoint -Count $NodeCount
+        Test-SshConnectivity -Ips $ips -SshUser $User -Timeout $SshTimeout
+        return @{ Ips = $ips; OwnIp = $null }
+    }
+
+    # Try cache first (unless forced)
+    if (-not $ForceDiscover) {
+        $cached = Get-PeerCache
+        if ($cached) { return $cached }
+    }
+
+    # Discovery mode
+    $eth1 = Get-OwnEth1Info
+    $peers = Find-Peers -OwnIp $eth1.Ip -Prefix $eth1.Prefix -SshUser $User -Timeout $SshTimeout
+
+    # Validate VMSS family
+    Test-VmssFamily -Ips $peers -SshUser $User -Timeout $SshTimeout
+
+    # If NodeCount given, validate expected count
+    if ($NodeCount -gt 0 -and $peers.Count -ne $NodeCount) {
+        Write-Host "WARNING: Expected $NodeCount peers but found $($peers.Count)" -ForegroundColor Yellow
+    }
+
+    # Save to cache
+    Save-PeerCache -Ips $peers -OwnIp $eth1.Ip
+
+    return @{ Ips = $peers; OwnIp = $eth1.Ip }
+}
+
+# --- Main ---
+
+Write-Host "==== cluster-deploy ($Action) ====" -ForegroundColor Cyan
+
+switch ($Action) {
+    "discover" {
+        if (-not $InstanceCount) { throw "ERROR: -InstanceCount is required for discover." }
+
+        $peerInfo = Resolve-Peers -Endpoint $Endpoint -NodeCount $NodeCount -User $User -SshTimeout $SshTimeout -ForceDiscover
+        $ips = $peerInfo.Ips
+
+        Write-Host ""
+        Write-Host "Probing ports on discovered peers..." -ForegroundColor Yellow
+        $probeResults = Test-Ports -Ips $ips -BasePort $Port -Count $InstanceCount
+
+        Write-Host ""
+        Show-Discovery -ProbeResults $probeResults -BasePort $Port -Count $InstanceCount
+    }
+
+    "start" {
+        if (-not $System) { throw "ERROR: -System is required for start." }
+        if (-not $Template) { throw "ERROR: -Template is required for start." }
+        if (-not $InstanceCount) { throw "ERROR: -InstanceCount is required for start." }
+
+        $peerInfo = Resolve-Peers -Endpoint $Endpoint -NodeCount $NodeCount -User $User -SshTimeout $SshTimeout
+        $ips = $peerInfo.Ips
+        $ownIp = $peerInfo.OwnIp
+
+        Write-Host ""
+        Write-Host "  Peers:         $($ips -join ', ')"
+        Write-Host "  System:        $System"
+        Write-Host "  Template:      $Template"
+        Write-Host "  InstanceCount: $InstanceCount"
+        Write-Host "  Port:          $Port"
+        Write-Host "  Clean:         $Clean"
+        Write-Host "  NoCluster:     $NoCluster"
+        Write-Host ""
+
+        # Build mcluster arguments
+        $mclusterArgs = "-Action start -System $System -Template $Template -Nodes $InstanceCount"
+        if ($Clean) { $mclusterArgs += " -Clean" }
+        if ($NoCluster) { $mclusterArgs += " -NoCluster" }
+
+        # Run on all peers
+        $failures = Invoke-ParallelMcluster -Ips $ips -SshUser $User -MclusterArgs $mclusterArgs -OwnIp $ownIp
+
+        if ($failures.Count -gt 0) {
+            Write-Host ""
+            Write-Host "WARNING: Some VMs failed. Cluster may be incomplete." -ForegroundColor Red
+        }
+
+        # Wait for all endpoints
+        $endpoints = @()
+        foreach ($ip in $ips) {
+            for ($p = 0; $p -lt $InstanceCount; $p++) {
+                $endpoints += "${ip}:$($Port + $p)"
+            }
+        }
+        Wait-ForEndpoints -Endpoints $endpoints -Timeout $TcpTimeout
+    }
+
+    "setup" {
+        if (-not $System) { throw "ERROR: -System is required for setup." }
+        if (-not $InstanceCount) { throw "ERROR: -InstanceCount is required for setup." }
+
+        $peerInfo = Resolve-Peers -Endpoint $Endpoint -NodeCount $NodeCount -User $User -SshTimeout $SshTimeout
+        $ips = $peerInfo.Ips
+
+        # Build endpoint list
+        $endpoints = @()
+        foreach ($ip in $ips) {
+            for ($p = 0; $p -lt $InstanceCount; $p++) {
+                $endpoints += "${ip}:$($Port + $p)"
+            }
+        }
+
+        # Verify all endpoints are listening
+        Write-Host ""
+        Write-Host "Verifying all endpoints are listening..." -ForegroundColor Yellow
+        $probeResults = Test-Ports -Ips $ips -BasePort $Port -Count $InstanceCount
+        $notListening = @()
+        foreach ($r in $probeResults) {
+            foreach ($ps in $r.Ports) {
+                if (-not $ps.Listening) {
+                    $notListening += "$($r.Ip):$($ps.Port)"
+                }
+            }
+        }
+
+        if ($notListening.Count -gt 0) {
+            Write-Host "ERROR: The following endpoints are not listening:" -ForegroundColor Red
+            $notListening | ForEach-Object { Write-Host "  $_" -ForegroundColor Red }
+            throw "Aborting setup: $($notListening.Count) endpoint(s) not ready. Run 'start' first."
+        }
+
+        Write-Host "  All $($endpoints.Count) endpoints listening ✓" -ForegroundColor Green
+
+        # Form cluster
+        if ($NoCluster) {
+            Write-Host ""
+            Write-Host "NOTE: -NoCluster specified, skipping cluster formation." -ForegroundColor Yellow
+        } else {
+            New-Cluster -Endpoints $endpoints -ReplicaCount $Replicas -Sys $System
         }
     }
 
-    # Wait for endpoints
-    Wait-ForEndpoints -Endpoints $endpoints -Timeout $TcpTimeout
+    "stop" {
+        if (-not $System) { throw "ERROR: -System is required for stop." }
+        if (-not $InstanceCount) { throw "ERROR: -InstanceCount is required for stop." }
 
-    # Form cluster
-    New-Cluster -Endpoints $endpoints -ReplicaCount $Replicas -Sys $System
-} elseif ($Setup -and $NoCluster) {
-    Write-Host ""
-    Write-Host "NOTE: --Setup ignored because --NoCluster was specified." -ForegroundColor Yellow
+        $peerInfo = Resolve-Peers -Endpoint $Endpoint -NodeCount $NodeCount -User $User -SshTimeout $SshTimeout
+        $ips = $peerInfo.Ips
+        $ownIp = $peerInfo.OwnIp
+
+        Write-Host ""
+        Write-Host "  Peers:  $($ips -join ', ')"
+        Write-Host "  System: $System"
+        Write-Host ""
+
+        $mclusterArgs = "-Action stop -System $System -Nodes $InstanceCount"
+        $failures = Invoke-ParallelMcluster -Ips $ips -SshUser $User -MclusterArgs $mclusterArgs -OwnIp $ownIp
+    }
 }
 
 Write-Host ""
