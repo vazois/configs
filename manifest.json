@@ -25,6 +25,7 @@
     { "run": "setup-cluster-dir.sh", "sudo": false, "args": "valkey" },
     { "run": "setup-cluster-dir.sh", "sudo": false, "args": "garnet" },
     { "run": "build.sh",             "sudo": true,  "args": "valkey 9.0" },
-    { "run": "build.sh",             "sudo": true,  "args": "garnet" }
+    { "run": "build.sh",             "sudo": true,  "args": "garnet" },
+    { "run": "build.sh",             "sudo": true,  "args": "resp-bench vazois/cluster-bench" }
   ]
 }
