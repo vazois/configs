@@ -147,6 +147,8 @@ iptables -C INPUT -i $IFACE -p tcp --dport 6379 -j ACCEPT 2>/dev/null || \
   iptables -I INPUT -i $IFACE -p tcp --dport 6379 -j ACCEPT
 iptables -C INPUT -i $IFACE -p tcp --dport 7000:7099 -j ACCEPT 2>/dev/null || \
   iptables -I INPUT -i $IFACE -p tcp --dport 7000:7099 -j ACCEPT
+iptables -C INPUT -i $IFACE -p tcp --dport 17000:17099 -j ACCEPT 2>/dev/null || \
+  iptables -I INPUT -i $IFACE -p tcp --dport 17000:17099 -j ACCEPT
 # Allow SSH between VMs in the same subnet
 iptables -C INPUT -p tcp --dport 22 -s $SUBNET -j ACCEPT 2>/dev/null || \
   iptables -I INPUT -p tcp --dport 22 -s $SUBNET -j ACCEPT
