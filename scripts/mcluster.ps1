@@ -123,6 +123,10 @@ function Resolve-Template {
 function Start-Valkey {
     param([int]$Count)
     $clusterDir = "$HOME/valkey-cluster"
+
+    Write-Host "Applying valkey network profile ($Count instances)..."
+    sudo /opt/deploy-actions/setup-network.sh valkey $Count
+
     Write-Host "Starting $Count valkey-server instances (ports ${BASE_PORT}-$($BASE_PORT + $Count - 1))..."
     for ($i = 0; $i -lt $Count; $i++) {
         $port = $BASE_PORT + $i
@@ -142,6 +146,10 @@ function Start-Valkey {
 function Start-Garnet {
     param([int]$Count)
     $clusterDir = "$HOME/garnet-cluster"
+
+    Write-Host "Applying garnet network profile..."
+    sudo /opt/deploy-actions/setup-network.sh garnet $Count
+
     Write-Host "Starting $Count GarnetServer instance(s)..."
     for ($i = 0; $i -lt $Count; $i++) {
         $port = $BASE_PORT + $i
