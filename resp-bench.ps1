@@ -61,7 +61,18 @@ Get-Content $ConfigFile | ForEach-Object {
 }
 
 # --- Resolve parameters ---
-$sshKey       = $config["SshKey"]       ?? "$env:USERPROFILE\.ssh\id_ed121824_notebook"
+$sshKeyRaw    = $config["SshKey"]       ?? "$env:USERPROFILE\.ssh\id_ed121824_notebook"
+# Support array syntax: [key1, key2, ...] — use first that exists
+if ($sshKeyRaw -match '^\[(.+)\]$') {
+    $candidates = $Matches[1] -split ',\s*'
+    $sshKey = $candidates | Where-Object { Test-Path $_ } | Select-Object -First 1
+    if (-not $sshKey) {
+        Write-Error "None of the SSH keys exist: $($candidates -join ', ')"
+        exit 1
+    }
+} else {
+    $sshKey = $sshKeyRaw
+}
 $sshUser      = $config["SshUser"]      ?? "guser"
 $sshHostBase  = $config["SshHost"]      ?? "vm0.dps8v6vmss.southcentralus.cloudapp.azure.com"
 $sshCount     = [int]($config["SshCount"] ?? "1")
