@@ -5,8 +5,9 @@
 
 .DESCRIPTION
     Reads benchmark parameters from a config file and launches SSH sessions
-    via Start-Process. Supports multiple client VMs by specifying a base hostname
-    and count. Each spawned window stays open after the benchmark completes.
+    via Start-Process with Tee-Object for local capture. Supports multiple
+    client VMs by specifying a base hostname and count. Automatically aggregates
+    results when all instances complete.
 
 .EXAMPLE
     .\resp-bench.ps1
@@ -143,24 +144,38 @@ Write-Host "  Command    : $benchCmd"
 Write-Host "===============================" -ForegroundColor Cyan
 Write-Host ""
 
-# --- Spawn panes in Windows Terminal (horizontal stack, max 5 per tab) ---
-Write-Host "Launching $sshCount pane(s) in Windows Terminal..." -ForegroundColor Yellow
+# --- Results directory ---
+$resultsDir = "$PSScriptRoot\results"
+
+# --- Launch benchmark panes ---
+
+# Create timestamped results folder
+$runTimestamp = Get-Date -Format "yyyyMMdd-HHmmss"
+$runDir = "$resultsDir\$runTimestamp"
+New-Item -ItemType Directory -Path $runDir -Force | Out-Null
+Write-Host "Results will be saved to: $runDir" -ForegroundColor DarkGray
+Write-Host ""
+
+# --- Spawn panes in Windows Terminal with Tee-Object ---
+Write-Host "Launching $($sshHosts.Count) pane(s) in Windows Terminal..." -ForegroundColor Yellow
 
 $maxPerTab = 2
 $wtArgs = @()
+$logFiles = @()
 for ($i = 0; $i -lt $sshHosts.Count; $i++) {
     $host_ = $sshHosts[$i]
-    $sshCmd = "ssh -i `"$sshKey`" -o StrictHostKeyChecking=no $sshUser@$host_ `"$benchCmd`""
+    $logFile = "$runDir\$($host_ -replace '\.', '-')-$i.log"
+    $logFiles += $logFile
+    $paneCmd = "powershell -NoExit -Command `"ssh -i '$sshKey' -o StrictHostKeyChecking=no $sshUser@$host_ '$benchCmd' 2>&1 | Tee-Object -FilePath '$logFile'`""
 
     if ($i % $maxPerTab -eq 0) {
         if ($i -eq 0) {
-            $wtArgs += "new-tab --title `"$host_`" cmd /k $sshCmd"
+            $wtArgs += "new-tab --title `"$host_`" $paneCmd"
         } else {
-            $wtArgs += "; new-tab --title `"$host_`" cmd /k $sshCmd"
+            $wtArgs += "; new-tab --title `"$host_`" $paneCmd"
         }
     } else {
-        $paneIndex = $i % $maxPerTab
-        $wtArgs += "; split-pane -H --title `"$host_`" cmd /k $sshCmd"
+        $wtArgs += "; split-pane -H --title `"$host_`" $paneCmd"
     }
 }
 
@@ -168,5 +183,65 @@ $tabs = [math]::Ceiling($sshHosts.Count / $maxPerTab)
 $wtArgString = $wtArgs -join " "
 Start-Process -FilePath "wt" -ArgumentList $wtArgString -Wait:$false
 
+Write-Host "$($sshHosts.Count) benchmark pane(s) launched across $tabs tab(s)." -ForegroundColor Green
 Write-Host ""
-Write-Host "$sshCount benchmark pane(s) launched across $tabs tab(s)." -ForegroundColor Green
+
+# --- Wait for all benchmarks to complete ---
+Write-Host "Waiting for benchmarks to complete (runtime: ${runtime}s)..." -ForegroundColor Yellow
+
+$timeout = [int]$runtime + 120
+$elapsed = 0
+$pollInterval = 5
+
+while ($elapsed -lt $timeout) {
+    Start-Sleep -Seconds $pollInterval
+    $elapsed += $pollInterval
+
+    $completed = 0
+    foreach ($lf in $logFiles) {
+        if (Test-Path $lf) {
+            $content = Get-Content $lf -Raw -ErrorAction SilentlyContinue
+            if ($content -and $content -match 'Total throughput:') {
+                $completed++
+            }
+        }
+    }
+
+    Write-Host "`r  Progress: $completed/$($logFiles.Count) complete | ${elapsed}s elapsed" -NoNewline
+    if ($completed -eq $logFiles.Count) { break }
+}
+
+Write-Host ""
+Write-Host ""
+
+# --- Aggregate results ---
+Write-Host "=== Aggregate Results ($runTimestamp) ===" -ForegroundColor Cyan
+$totalKops = 0.0
+$totalData = 0.0
+$totalWire = 0.0
+
+$maxHostLen = ($logFiles | ForEach-Object { (Split-Path $_ -Leaf).Replace('.log','').Length } | Measure-Object -Maximum).Maximum
+
+foreach ($lf in $logFiles) {
+    $name = (Split-Path $lf -Leaf).Replace('.log','')
+    if (Test-Path $lf) {
+        $content = Get-Content $lf
+        $kopsLine = $content | Where-Object { $_ -match 'Total throughput:.*?([\d,.]+)\s*Kops/sec' } | Select-Object -Last 1
+        $dataLine = $content | Where-Object { $_ -match 'Data throughput:.*?([\d.]+)\s*GB/sec' } | Select-Object -Last 1
+        $wireLine = $content | Where-Object { $_ -match 'Wire throughput:.*?([\d.]+)\s*GB/sec' } | Select-Object -Last 1
+
+        $kops = 0.0; $data = 0.0; $wire = 0.0
+        if ($kopsLine -match '([\d,.]+)\s*Kops/sec') { $kops = [double]($Matches[1] -replace ',', '') }
+        if ($dataLine -match '([\d.]+)\s*GB/sec') { $data = [double]$Matches[1] }
+        if ($wireLine -match '([\d.]+)\s*GB/sec') { $wire = [double]$Matches[1] }
+
+        $totalKops += $kops
+        $totalData += $data
+        $totalWire += $wire
+        Write-Host ("  {0}  {1,12:N2} Kops/sec | {2,6:N3} GB/s data | {3,6:N3} GB/s wire" -f $name.PadRight($maxHostLen), $kops, $data, $wire)
+    } else {
+        Write-Host "  $($name.PadRight($maxHostLen))  (no results)" -ForegroundColor DarkGray
+    }
+}
+Write-Host ("  " + ("-" * 70))
+Write-Host ("  {0}  {1,12:N2} Kops/sec | {2,6:N3} GB/s data | {3,6:N3} GB/s wire" -f "TOTAL".PadRight($maxHostLen), $totalKops, $totalData, $totalWire) -ForegroundColor Green
