@@ -137,9 +137,9 @@ Write-Host "  SSH Key    : $sshKey"
 Write-Host "  SSH User   : $sshUser"
 Write-Host "  Instances  : $instances ($multiplier x $uniqueHosts hosts)"
 Write-Host "  Clients    : $clientsPerShard per shard ($threads threads x $instances instances)"
-foreach ($h in ($sshHosts | Select-Object -Unique)) {
-    Write-Host "    $h"
-}
+# foreach ($h in ($sshHosts | Select-Object -Unique)) {
+#     Write-Host "    $h"
+# }
 Write-Host "  Command    : $benchCmd"
 Write-Host "===============================" -ForegroundColor Cyan
 Write-Host ""
